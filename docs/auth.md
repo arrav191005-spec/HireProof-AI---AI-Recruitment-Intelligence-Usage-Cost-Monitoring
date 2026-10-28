@@ -91,6 +91,17 @@ access-token expiry is transparent to the user.
    "Supabase Auth enforced — signed in as <email>".
 4. `curl -i localhost:3000/api/candidates` without cookies → HTTP 401.
 
+### In production (Cloudflare Workers)
+
+The deployed Worker sets `AUTH_MODE=supabase` as a plain var in
+`wrangler.jsonc` (kept identical to the `NEXT_PUBLIC_AUTH_MODE` baked into the
+build — see `.env.local` at build time), and GoTrue sign-in runs server-side
+from the Worker, so no auth secret is ever exposed to the client. Verified on
+the live URL: sign-in → Overview, session enforced across pages, sign-out →
+`/login`, and `/api/candidates` without cookies → `401 {"message":"Sign in
+required"}`. Cookie names and chunking are unchanged from the local setup
+(`@supabase/ssr`); the middleware refreshes expiring tokens the same way.
+
 ### Known limitations
 
 - **No password reset UI.** `/signup` exists, but password recovery is not

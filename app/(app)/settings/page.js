@@ -8,6 +8,7 @@ import {
 import { getBackendInfo } from '@/lib/repo';
 import { aiMode } from '@/lib/config';
 import { requireUser } from '@/lib/api';
+import { resumeStorageInfo } from '@/lib/uploads';
 import {
   DATABASE_URL, AI_SERVICE_URL, OPENAI_API_KEY, OPENAI_CHAT_MODEL, OPENAI_EMBEDDING_MODEL,
   MAX_RESUME_SIZE_MB, AUTH_MODE, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY,
@@ -83,6 +84,7 @@ export default async function SettingsPage() {
   const authOk = authEnforced && Boolean(sessionUser);
   const llmOk = aiMode() === 'configured';
   const serviceOk = Boolean(service.ok && service.data?.status === 'ok');
+  const storageInfo = resumeStorageInfo();
 
   const envRows = [
     ['DATABASE_URL', maskDatabase(DATABASE_URL) ?? 'not set', 'PostgreSQL connection (server only)', Boolean(DATABASE_URL)],
@@ -177,8 +179,8 @@ export default async function SettingsPage() {
               icon={HardDrive}
               label="Resume storage"
               ok
-              value="server filesystem"
-              detail={`storage/resumes/ (gitignored, never served publicly) · limit ${MAX_RESUME_SIZE_MB} MB · PDF magic-byte + content validation`}
+              value={storageInfo.value}
+              detail={`${storageInfo.detail} · limit ${MAX_RESUME_SIZE_MB} MB · PDF magic-byte + content validation`}
             />
           </CardBody>
         </Card>

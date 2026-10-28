@@ -5,3 +5,8 @@ const nextConfig = {
 };
 
 export default nextConfig;
+
+// Registers the Wrangler platform proxy so `next dev` can see Cloudflare
+// bindings. No-op outside of Wrangler-managed environments.
+import { initOpenNextCloudflareForDev } from '@opennextjs/cloudflare';
+initOpenNextCloudflareForDev();

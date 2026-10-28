@@ -149,6 +149,56 @@ navigation drawer.
 
 ---
 
+## Deployment (live)
+
+| Piece | Where | URL |
+|---|---|---|
+| Next.js frontend + API | Cloudflare Workers (OpenNext) | https://hireproof-ai.hireproof-ai.workers.dev |
+| Python document service | Render (Free, Singapore) | https://hireproof-documents.onrender.com |
+| PostgreSQL + Auth | Supabase (Tokyo, pooler `:6543`) | — |
+
+### Cloudflare Workers (frontend)
+
+Built with `@opennextjs/cloudflare` + wrangler:
+
+```bash
+npm run preview     # local workerd on :8787 (reads .dev.vars, gitignored)
+npm run deploy      # opennextjs-cloudflare build + wrangler deploy
+```
+
+- Non-secret vars live in `wrangler.jsonc`: `AUTH_MODE=supabase`,
+  `AI_SERVICE_URL=https://hireproof-documents.onrender.com`.
+- `DATABASE_URL` is a **secret**: `grep '^DATABASE_URL=' .env.local | cut -d= -f2- | tr -d '"' | npx wrangler secret put DATABASE_URL`
+- `compatibility_flags: ["nodejs_compat"]` — `node:net`/`node:tls` shims are
+  what let `pg` open TCP to the Supabase pooler from workerd.
+  `global_fetch_strictly_public` is deliberately omitted so preview can call
+  `http://127.0.0.1:8000` locally.
+- Binding access goes through `getCloudflareContext().env.X` (never
+  `process.env` for bindings). Runtime detection:
+  `navigator.userAgent === "Cloudflare-Workers"`.
+
+### Render (document service)
+
+- Service `hireproof-documents`, root `python-service`, start command
+  `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+- Connected as a **Public Git Repository** → redeploys are manual (Render
+  dashboard → Manual deploy), no auto-deploy on push without a Blueprint.
+- Free tier sleeps when idle: first request after idle takes ~30 s. The
+  Settings probe uses a 1.5 s timeout, so a cold instance can transiently show
+  "not running" — refresh once it wakes.
+
+### Verified live (2026-10-28)
+
+Browser end-to-end on the deployed workers.dev URL: `/api/health` →
+`dataBackend: postgres` · sign-in → Overview with no demo banner (12
+candidates) · search → 9 matches with requirement-evidence labels · candidate
+detail with extraction + evidence tabs · upload → create → double-submit 409
+guard · Settings (PostgreSQL · Supabase Auth · document service running
+v1.0.0 · in-memory storage honestly labeled) · sign-out → `/login` + API 401 ·
+fresh-page console clean.
+
+---
+
 ## Known limitations
 
 - **Search quality is a baseline.** P@5 0.47 on the judged set — the ranking is
@@ -174,8 +224,28 @@ navigation drawer.
 - **Extractor conservatism.** The heuristics prefer missing data over guessing:
   unusual resume layouts may yield fewer entries than a human would extract.
   The review step exists precisely for humans to fill those gaps.
-- **Uploaded resumes persist on the local filesystem** (`storage/resumes/`);
-  there is no S3/Supabase-Storage integration.
+- **Resume storage is runtime-dependent.** Local/dev stores files on disk
+  (`storage/resumes/`). On the deployed Worker there is no filesystem and no
+  R2 binding (subscription not activated), so upload sessions live in a
+  **per-isolate in-memory map**: the `.meta.json` survives until a cold start,
+  the raw PDF bytes are not retained, and upload→save must hit the same
+  isolate — a miss returns an honest 404 ("upload session is no longer
+  available") rather than a fabricated success; the duplicate-submit guard
+  still prevents double creation (409 when the isolate is shared). Enabling
+  durable R2 later needs no code change — steps are commented in
+  `wrangler.jsonc` (`r2_buckets`).
+- **Workers ↔ Supabase over plain TCP.** workerd's `node:tls` shim does not
+  implement `rejectUnauthorized` (it throws), and the pooler certificate is
+  rejected by its verifier — so on Workers the pooler connection runs
+  **unencrypted plain TCP** (`database/tls.js` returns `ssl: false`, verified
+  accept by the pooler). On Node the same config uses TLS. Related: workerd
+  also wedges when an idle pooled connection is reused, so Workers opens a
+  **fresh `pg` Client per query** (`lib/repo/postgres.js`) instead of a pool —
+  correct but with per-query connection overhead.
+- **Render has no auto-deploy.** The service tracks the repo as a public Git
+  repository, so pushes to GitHub do not redeploy it — trigger a Manual
+  deploy from the Render dashboard. The free instance also sleeps when idle
+  (~30 s cold start; the Settings probe may transiently show "not running").
 - **No rate limiting or CSRF hardening** beyond SameSite cookies — fine for a
   demo, add a gateway before real traffic.
 
@@ -186,6 +256,8 @@ navigation drawer.
 | Command | What it does |
 |---|---|
 | `npm run dev` | Next dev server on :3000 (reads `.env.local`) |
+| `npm run preview` | Production build served by local workerd on :8787 (Cloudflare parity) |
+| `npm run deploy` | Build + `wrangler deploy` to Cloudflare Workers |
 | `npm run build` / `npm start` | Production build / serve |
 | `npm test` | Node test suite (plain `node --test`, no deps) |
 | `npm run service` | Python FastAPI document service (venv-aware) |

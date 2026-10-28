@@ -1,11 +1,9 @@
 import { NextResponse } from 'next/server';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import crypto from 'node:crypto';
 import { ok, fail, requireUser, handleRouteError } from '@/lib/api';
 import { MAX_RESUME_SIZE_MB } from '@/lib/config';
 import { parseResumePdf, extractResumeEvidence } from '@/lib/ai-client';
-import { UPLOAD_DIR, uploadPdfPath, uploadMetaPath } from '@/lib/uploads';
+import { storeResumeUpload } from '@/lib/uploads';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,9 +51,6 @@ export async function POST(request) {
     });
 
     const uploadId = `upl-${crypto.randomUUID()}`;
-    const storagePath = path.relative(process.cwd(), uploadPdfPath(uploadId));
-    await mkdir(UPLOAD_DIR, { recursive: true });
-    await writeFile(uploadPdfPath(uploadId), bytes);
 
     const meta = {
       uploadId,
@@ -63,13 +58,15 @@ export async function POST(request) {
       mimeType: 'application/pdf',
       fileSize: bytes.length,
       pageCount: parsed.pageCount,
-      storagePath,
+      storagePath: null, // set by storeResumeUpload and persisted with the meta
       uploadedAt: new Date().toISOString(),
       truncated: Boolean(parsed.truncated),
       parseVia: parsed.via,
       extraction,
     };
-    await writeFile(uploadMetaPath(uploadId), JSON.stringify(meta, null, 2));
+    // Persists the raw PDF + meta.json: disk (Node), R2 when bound, or the
+    // per-isolate in-memory fallback on Workers without R2.
+    meta.storagePath = await storeResumeUpload({ uploadId, bytes, meta });
 
     // Audit only the metadata — never document contents.
     console.info(

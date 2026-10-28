@@ -8,6 +8,8 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "test": "node --import ./tests/helpers/register-alias.mjs --test \"tests/*.test.js\"",
     "db:migrate": "node database/run-migrations.js",
     "db:seed": "node database/seed.js",
@@ -27,8 +29,10 @@
     "zod": "^4.1.11"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.20.13",
     "@tailwindcss/postcss": "^4.1.14",
     "postcss": "^8.5.6",
-    "tailwindcss": "^4.1.14"
+    "tailwindcss": "^4.1.14",
+    "wrangler": "^4.154.0"
   }
 }

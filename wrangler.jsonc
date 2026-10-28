@@ -1,0 +1,43 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "hireproof-ai",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": [
+    // node:net / node:tls shims are what let the `pg` driver open its TCP
+    // connection to the Supabase transaction pooler from the Workers runtime.
+    "nodejs_compat"
+    // NOTE: `global_fetch_strictly_public` is deliberately omitted — it blocks
+    // fetch() to private addresses, which would break server-side calls to the
+    // document service during local preview (http://127.0.0.1:8000).
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  // Resume uploads (raw PDF + extraction meta.json) on Workers, where there is
+  // no filesystem. R2 is skipped for now (subscription not activated), so
+  // lib/uploads.js falls back to a per-isolate in-memory cache on Workers and
+  // Node keeps using storage/resumes/. To enable durable R2 later:
+  //   1. activate R2 in the Cloudflare dashboard
+  //   2. npx wrangler r2 bucket create hireproof-ai-resumes
+  //   3. uncomment the block below and redeploy (no code changes needed)
+  // "r2_buckets": [
+  //   {
+  //     "binding": "RESUME_UPLOADS",
+  //     "bucket_name": "hireproof-ai-resumes"
+  //   }
+  // ],
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "hireproof-ai"
+    }
+  ],
+  // Non-secret runtime vars (secrets like DATABASE_URL go through
+  // `wrangler secret put`, never into this file).
+  "vars": {
+    "AUTH_MODE": "supabase",
+    "AI_SERVICE_URL": "https://hireproof-documents.onrender.com"
+  }
+}

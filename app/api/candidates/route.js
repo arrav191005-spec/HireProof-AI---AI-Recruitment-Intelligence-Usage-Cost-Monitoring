@@ -1,8 +1,7 @@
-import { writeFile } from 'node:fs/promises';
 import getRepo from '@/lib/repo';
 import { ok, fail, requireUser, validate, handleRouteError } from '@/lib/api';
 import { candidateCreateSchema } from '@/lib/validation';
-import { readUploadMeta, uploadMetaPath } from '@/lib/uploads';
+import { readUploadMeta, writeUploadMeta } from '@/lib/uploads';
 
 export const dynamic = 'force-dynamic';
 
@@ -117,7 +116,7 @@ export async function POST(request) {
     // duplicate profiles from the same upload.
     meta.consumedAt = new Date().toISOString();
     meta.candidateId = candidate.id;
-    await writeFile(uploadMetaPath(data.uploadId), JSON.stringify(meta, null, 2));
+    await writeUploadMeta(data.uploadId, meta);
 
     await repo.logAudit({
       action: 'candidate.create',
