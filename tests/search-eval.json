@@ -1,0 +1,56 @@
+{
+  "description": "Manually judged search evaluation queries for HireProof AI. Relevance: 2 = directly answers the query, 1 = partially relevant. Judged against the synthetic demo dataset in lib/demo-data.js.",
+  "judgedQueries": [
+    {
+      "id": "q1",
+      "query": "Find junior developers who have built React applications, developed Node.js APIs, and worked with a SQL database. TypeScript is preferred but not required.",
+      "judgments": {
+        "cand-ava-thompson": 2,
+        "cand-marcus-chen": 2,
+        "cand-priya-nair": 1,
+        "cand-grace-liu": 1
+      }
+    },
+    {
+      "id": "q2",
+      "query": "senior React TypeScript engineer with Next.js experience",
+      "judgments": {
+        "cand-elena-petrova": 2,
+        "cand-jordan-blake": 2,
+        "cand-ravi-patel": 1
+      }
+    },
+    {
+      "id": "q3",
+      "query": "backend engineer with Node.js and PostgreSQL performance experience",
+      "judgments": {
+        "cand-sam-okafor": 2,
+        "cand-ravi-patel": 2,
+        "cand-lena-fischer": 1
+      }
+    },
+    {
+      "id": "q4",
+      "query": "python data engineer with Airflow and SQL pipelines",
+      "judgments": {
+        "cand-noah-kim": 2,
+        "cand-lena-fischer": 1
+      }
+    },
+    {
+      "id": "q5",
+      "query": "product designer experienced in Figma and prototyping",
+      "judgments": {
+        "cand-isabella-rossi": 2
+      }
+    },
+    {
+      "id": "q6",
+      "query": "junior frontend developer with React and TypeScript",
+      "judgments": {
+        "cand-grace-liu": 2,
+        "cand-diego-ramirez": 1
+      }
+    }
+  ]
+}

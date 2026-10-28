@@ -1,0 +1,103 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 714 >>
+stream
+BT
+/F1 11 Tf
+14 TL
+72 720 Td
+(MIRA ODELL) Tj
+T*
+(mira.odell@example.com | Bristol, UK) Tj
+T*
+(Backend Developer) Tj
+T*
+() Tj
+T*
+(SUMMARY) Tj
+T*
+(Backend developer with 5 years of experience building APIs and data pipelines.) Tj
+T*
+() Tj
+T*
+(SKILLS) Tj
+T*
+(Python, FastAPI, PostgreSQL, Docker, Kafka, Git) Tj
+T*
+() Tj
+T*
+(EXPERIENCE) Tj
+T*
+(Backend Developer at Larkspur Systems | 2021-03 - Present) Tj
+T*
+(Designed FastAPI services and PostgreSQL schemas; containerised with Docker.) Tj
+T*
+(Wrote Kafka consumers feeding the reporting database. Code reviewed via Git.) Tj
+T*
+() Tj
+T*
+(Junior Developer at Kestrel Media | 2019-01 - 2021-02) Tj
+T*
+(Maintained REST endpoints in Python and wrote pytest suites.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 301 >>
+stream
+BT
+/F1 11 Tf
+14 TL
+72 720 Td
+(PROJECTS) Tj
+T*
+(Queue metrics dashboard) Tj
+T*
+(Python service streaming Kafka events into a PostgreSQL dashboard.) Tj
+T*
+() Tj
+T*
+(EDUCATION) Tj
+T*
+(BSc Computer Science) Tj
+T*
+(University of Bristol 2019) Tj
+T*
+() Tj
+T*
+(REFERENCES) Tj
+T*
+(Available on request.) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000001012 00000 n 
+0000001138 00000 n 
+0000001490 00000 n 
+trailer
+<< /Size 8 /Root 1 0 R >>
+startxref
+1560
+%%EOF
