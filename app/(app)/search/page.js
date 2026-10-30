@@ -8,8 +8,9 @@ export default async function SearchPage({ searchParams }) {
   const params = await searchParams;
   const repo = await getRepo();
   const { items: jobs } = await repo.listJobs({ pageSize: 50 });
-  const corpus = await repo.searchCorpus();
-  const allSkills = [...new Set(corpus.flatMap((e) => e.skills.map((s) => s.skill)))].sort();
+  // Filter vocabulary only — the full corpus is loaded per search POST in
+  // /api/search, not on every page view.
+  const allSkills = (await repo.listSkillVocab()).sort();
 
   return (
     <>

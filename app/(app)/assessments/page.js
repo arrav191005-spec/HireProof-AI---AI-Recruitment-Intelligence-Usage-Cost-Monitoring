@@ -5,7 +5,7 @@ import { EmptyState, InlineAlert } from '@/components/ui/Feedback';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import { ClipboardCheck, Clock, Users, FileCode2 } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/NoPrefetchLink';
 import AssessmentForm from '@/components/assessments/AssessmentForm';
 
 export const dynamic = 'force-dynamic';

@@ -5,7 +5,7 @@ import Button from '@/components/ui/Button';
 import { JobStatusBadge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/Feedback';
 import { Plus, Briefcase, Search, MapPin } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/NoPrefetchLink';
 import JobsSearchBox from '@/components/jobs/JobsSearchBox';
 
 export const dynamic = 'force-dynamic';
@@ -24,11 +24,9 @@ export default async function JobsPage({ searchParams }) {
   const repo = await getRepo();
   const { items, total } = await repo.listJobs({ status, q, pageSize: 50 });
 
-  const appCounts = {};
-  for (const job of items) {
-    const apps = await repo.getJobApplications(job.id);
-    appCounts[job.id] = apps.length;
-  }
+  // One grouped query instead of awaiting getJobApplications per row
+  // (previously up to 50 serial round-trips per page view).
+  const appCounts = await repo.applicationCounts(items.map((job) => job.id));
 
   return (
     <>

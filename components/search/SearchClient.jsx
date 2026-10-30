@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
+import Link from '@/components/ui/NoPrefetchLink';
 import { useRouter } from 'next/navigation';
 import {
   Search, Sparkles, SlidersHorizontal, Users, MapPin, Briefcase, History,

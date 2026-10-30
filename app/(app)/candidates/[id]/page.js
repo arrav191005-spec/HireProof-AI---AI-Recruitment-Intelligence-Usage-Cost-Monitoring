@@ -14,15 +14,21 @@ export default async function CandidateProfilePage({ params }) {
   const candidate = await repo.getCandidate(id);
   if (!candidate) notFound();
 
-  const [evidence, submissions, applications, jobsResult, corpus] = await Promise.all([
+  // Only THIS candidate's data is needed: requirementStatusFor() below reads
+  // entry.skills/evidence/submissions. The old implementation loaded the
+  // ENTIRE search corpus (9 queries over every candidate) and find()-ed one
+  // entry out of it — the single most expensive document render on the
+  // Workers free plan (~500 ms CPU cold). One targeted skills query instead;
+  // evidence and submissions were already being fetched for the page.
+  const [evidence, submissions, applications, jobsResult, skills] = await Promise.all([
     repo.getCandidateEvidence(id),
     repo.getCandidateSubmissions(id),
     repo.getCandidateApplications(id),
     repo.listJobs({ pageSize: 50 }),
-    repo.searchCorpus(),
+    repo.getCandidateSkills(id),
   ]);
 
-  const entry = corpus.find((e) => e.candidate.id === id) ?? null;
+  const entry = { skills, evidence, submissions };
 
   // Requirement-level evidence per relevant job, computed with the same
   // function the search engine uses (one source of truth for status logic).

@@ -125,7 +125,62 @@ access only works through the server.
 
 ---
 
-## Test results (2026-10-28)
+## Performance on Workers Free
+
+The deployment runs on Cloudflare Workers **Free** (10 ms CPU per request).
+Instead of upgrading, the app was engineered to fit: every change below was
+driven by `wrangler tail` cpuTime measurements per route.
+
+- **No N+1 and no whole-corpus loads on list pages.** `/candidates` uses
+  `listSkillVocab()` (one distinct-skill query) and `candidateRollups()` (two
+  grouped queries) instead of the full search corpus (~9 queries) plus 2×N
+  per-row queries. `/jobs` uses `applicationCounts()` (one grouped query)
+  instead of a serial per-job loop. The candidate detail page builds its
+  requirement matrix from that candidate's own skills/evidence/submissions —
+  previously it loaded the entire corpus just to `find()` one entry.
+- **Single-statement analytics.** `analyticsSummary()` is one SQL statement
+  (counts, both group aggregates, weekly buckets via UTC ISO-week CTEs)
+  instead of six round-trips — each query on Workers is a fresh TCP
+  connection. Verified byte-identical to the previous implementation against
+  the live database.
+- **Per-isolate read-through cache** (`lib/repo/index.js`): 15 s TTL, promise
+  dedupe, 128 entries, invalidated by any write through a version guard. Warm
+  pages reuse rows instead of re-querying Supabase; all 12 mutation sites call
+  `router.refresh()` and sign-out is a hard navigation.
+- **Charts render client-side only.** Recharts loads through `next/dynamic`
+  (`ssr: false`, height-matched skeletons), so the server never serializes
+  chart markup and the JS comes from immutable static assets.
+- **Link prefetching is disabled** (`components/ui/NoPrefetchLink.jsx`).
+  Next.js otherwise prefetches every visible link: opening the dashboard fired
+  RSC prefetches for the whole sidebar (~1.4 s CPU in one burst), which heated
+  the isolate until the next navigation was killed with Error 1102. Clicking
+  still navigates client-side in one request.
+- **Router cache** (`experimental.staleTimes: { dynamic: 15, static: 180 }`):
+  back/forward and revisits within 15 s are served from the client cache with
+  **zero worker invocations** (confirmed via `wrangler tail`).
+- **Middleware skips the GoTrue round-trip when there is no `sb-` cookie** —
+  anonymous hits on `/login`, `/signup` and blocked pages cost 2–5 ms.
+
+Measured with `wrangler tail` (cpuTime, single navigation on a cold isolate):
+
+| Route | Before | After |
+|---|---|---|
+| `/candidates/[id]` document | 494–498 ms — and 1102-killed | **77 ms** |
+| `/analytics` document | 167–599 ms | **80 ms** |
+| `/` document | 46–434 ms | 76–221 ms |
+| `/candidates` RSC nav | 305–425 ms | 95–99 ms |
+| `/jobs` RSC nav | 121–379 ms | 57–76 ms |
+| Back / forward | full re-render | **0 invocations** |
+| Dashboard visit | +5–6 prefetch invocations (~1.4 s) | **0 prefetches** |
+
+A cold isolate still exceeds 10 ms on first render; Cloudflare tolerates brief
+overages and terminates requests only once an isolate is hot. Cutting
+per-request work *and* the prefetch burst is what keeps it cool under real
+navigation — zero `exceededCpu` outcomes were observed after these changes.
+
+---
+
+## Test results (2026-10-30)
 
 | Suite | Result | What it covers |
 |---|---|---|
@@ -248,6 +303,21 @@ fresh-page console clean.
   (~30 s cold start; the Settings probe may transiently show "not running").
 - **No rate limiting or CSRF hardening** beyond SameSite cookies — fine for a
   demo, add a gateway before real traffic.
+- **Link prefetching is intentionally off.** Navigating between app pages
+  fetches the target page once on click instead of the browser preloading every
+  visible link. This trades a small amount of per-click latency for not running
+  the whole sidebar's data queries on every page view — the prefetch burst was
+  the direct cause of Workers CPU kills.
+- **Cached reads are bounded, not real-time.** The per-isolate read cache has a
+  15 s TTL. Any write through the repo invalidates cached reads on that isolate,
+  but a second isolate can serve rows up to 15 s old. Acceptable for a
+  recruiting dashboard; tighten the TTL if multi-isolate freshness matters.
+- **Free-plan CPU is still a hard ceiling.** The 10 ms limit is per-request and
+  Cloudflare only terminates requests once an isolate is hot; a cold isolate's
+  first render necessarily exceeds it. Measurements above are single-navigation
+  `cpuTime` on cold isolates, and a burst of expensive requests can still
+  exhaust the budget — this architecture minimizes the work per request, it
+  does not remove the limit.
 
 ---
 

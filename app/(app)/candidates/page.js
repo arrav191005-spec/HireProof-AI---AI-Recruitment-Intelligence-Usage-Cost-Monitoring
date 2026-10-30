@@ -5,7 +5,7 @@ import Button from '@/components/ui/Button';
 import { EmptyState, Breadcrumbs, InlineAlert } from '@/components/ui/Feedback';
 import { EvidenceBadge } from '@/components/ui/Badge';
 import { Users, MapPin, Plus, Upload, ClipboardCheck, X } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/NoPrefetchLink';
 import CandidateFilters from '@/components/candidates/CandidateFilters';
 
 export const dynamic = 'force-dynamic';
@@ -33,26 +33,13 @@ export default async function CandidatesPage({ searchParams }) {
     q, skill, minYears, maxYears, evidenceStatus, sort, page, pageSize: 10,
   });
 
-  const allSkills = [...new Set(
-    (await repo.searchCorpus()).flatMap((e) => e.skills.map((s) => s.skill))
-  )].sort();
+  // Skill vocabulary for the filter dropdown — one distinct-skill query
+  // instead of loading the entire search corpus (skills + evidence +
+  // experience + projects + resumes + submissions + applications).
+  const allSkills = (await repo.listSkillVocab()).sort();
 
-  // Per-page evidence + assessment rollup (bounded by page size)
-  const rollups = {};
-  await Promise.all(
-    items.map(async (c) => {
-      const [evidence, submissions] = await Promise.all([
-        repo.getCandidateEvidence(c.id),
-        repo.getCandidateSubmissions(c.id),
-      ]);
-      rollups[c.id] = {
-        supportCount: evidence.filter((e) => e.status === 'supporting' || e.status === 'assessment').length,
-        pendingReview: evidence.filter((e) => e.status === 'needs_review' || e.status === 'claimed').length,
-        completedAssessments: submissions.filter((s) => s.status === 'completed').length,
-        totalEvidence: evidence.length,
-      };
-    })
-  );
+  // Per-page evidence + assessment rollup in two grouped queries, not 2×N.
+  const rollups = await repo.candidateRollups(items.map((c) => c.id));
 
   const baseParams = { q, skill, minYears, maxYears, sort, evidenceStatus };
   const queryParams = (extra = {}, omit = []) => {

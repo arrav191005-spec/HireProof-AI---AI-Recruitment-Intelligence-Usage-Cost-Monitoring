@@ -8,9 +8,8 @@ import {
   Briefcase, Users, ClipboardCheck, AlertTriangle, ArrowRight, Search,
   FileText, Activity, Plus,
 } from 'lucide-react';
-import Link from 'next/link';
-import ActivityTrendChart from '@/components/dashboard/ActivityTrendChart';
-import FunnelChart from '@/components/dashboard/FunnelChart';
+import Link from '@/components/ui/NoPrefetchLink';
+import { LazyActivityTrendChart, LazyFunnelChart } from '@/components/dashboard/DeferredCharts';
 import DemoModeBanner from '@/components/dashboard/DemoModeBanner';
 
 export const dynamic = 'force-dynamic';
@@ -95,13 +94,13 @@ export default async function OverviewPage() {
         <Card className="xl:col-span-2">
           <CardHeader title="Recruitment activity" subtitle="Applications, searches and resume uploads per week (demo data)" />
           <CardBody>
-            <ActivityTrendChart data={summary.weeks} />
+            <LazyActivityTrendChart data={summary.weeks} />
           </CardBody>
         </Card>
         <Card>
           <CardHeader title="Pipeline funnel" subtitle={`${summary.totalApplications} applications across all jobs`} />
           <CardBody>
-            <FunnelChart byStage={summary.byStage} />
+            <LazyFunnelChart byStage={summary.byStage} />
           </CardBody>
         </Card>
       </div>

@@ -34,6 +34,16 @@
       "service": "hireproof-ai"
     }
   ],
+  // Observability lives in this file because `wrangler deploy` pushes it as
+  // the source of truth — without it, every deploy silently turns off the
+  // dashboard's Workers Logs / traces / real-time Issues that were enabled
+  // in the Cloudflare UI.
+  "observability": {
+    "enabled": true,
+    "issues": { "enabled": true },
+    "logs": { "enabled": true },
+    "traces": { "enabled": true }
+  },
   // Non-secret runtime vars (secrets like DATABASE_URL go through
   // `wrangler secret put`, never into this file).
   "vars": {

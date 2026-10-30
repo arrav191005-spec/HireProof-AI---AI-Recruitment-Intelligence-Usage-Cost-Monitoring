@@ -4,10 +4,9 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import { InlineAlert } from '@/components/ui/Feedback';
 import { Briefcase, Users, GitPullRequestArrow, Clock, Activity, BarChart3 } from 'lucide-react';
-import Link from 'next/link';
-import ActivityTrendChart from '@/components/dashboard/ActivityTrendChart';
-import FunnelChart from '@/components/dashboard/FunnelChart';
-import EvidenceStatusChart from '@/components/analytics/EvidenceStatusChart';
+import Link from '@/components/ui/NoPrefetchLink';
+import { LazyActivityTrendChart, LazyFunnelChart } from '@/components/dashboard/DeferredCharts';
+import { LazyEvidenceStatusChart } from '@/components/analytics/DeferredCharts';
 import SearchQualityPanel from '@/components/analytics/SearchQualityPanel';
 
 export const dynamic = 'force-dynamic';
@@ -80,7 +79,7 @@ export default async function AnalyticsPage() {
             subtitle="Applications, searches and uploads over the last 6 weeks (Monday-anchored)"
           />
           <CardBody>
-            <ActivityTrendChart data={s.weeks} />
+            <LazyActivityTrendChart data={s.weeks} />
             <p className="mt-2 text-xs text-slate-400">
               {s.searchesLast30d} search{s.searchesLast30d === 1 ? '' : 'es'} recorded in total.
             </p>
@@ -98,7 +97,7 @@ export default async function AnalyticsPage() {
             }
           />
           <CardBody>
-            <FunnelChart byStage={s.byStage} />
+            <LazyFunnelChart byStage={s.byStage} />
           </CardBody>
         </Card>
       </div>
@@ -115,7 +114,7 @@ export default async function AnalyticsPage() {
             }
           />
           <CardBody>
-            <EvidenceStatusChart evidenceByStatus={s.evidenceByStatus} />
+            <LazyEvidenceStatusChart evidenceByStatus={s.evidenceByStatus} />
             {awaiting > 0 && (
               <div className="mt-3">
                 <InlineAlert tone="warning" title={`${awaiting} record${awaiting === 1 ? '' : 's'} need human judgment`}>

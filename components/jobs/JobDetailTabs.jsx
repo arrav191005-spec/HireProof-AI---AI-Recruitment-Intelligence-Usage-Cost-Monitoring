@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
+import Link from '@/components/ui/NoPrefetchLink';
 import Tabs from '@/components/ui/Tabs';
 import { Card, CardHeader, CardBody } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
+import Link from '@/components/ui/NoPrefetchLink';
 import { useRouter } from 'next/navigation';
 import Tabs from '@/components/ui/Tabs';
 import { Card, CardHeader, CardBody } from '@/components/ui/Card';

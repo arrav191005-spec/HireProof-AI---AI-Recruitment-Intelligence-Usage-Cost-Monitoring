@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="HireProof AI">
+  <rect width="64" height="64" rx="14" fill="#2578eb"/>
+  <path d="M20 16h6.5v11.2h11V16H44v32h-6.5V34.8h-11V48H20V16z" fill="#ffffff"/>
+  <path d="M42.5 44.5l3.4 3.4 6.6-7.4" stroke="#93c5fd" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
+import Link from '@/components/ui/NoPrefetchLink';
 import { useRouter } from 'next/navigation';
 import { MessageCircleQuestionMark, UserPlus, FileText, ChevronDown, ChevronUp } from 'lucide-react';
 import Button from '@/components/ui/Button';

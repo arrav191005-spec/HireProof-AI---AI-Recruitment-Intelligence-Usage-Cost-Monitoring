@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import Link from '@/components/ui/NoPrefetchLink';
 
 export function Skeleton({ className = '' }) {
   return <div aria-hidden="true" className={`animate-pulse rounded-md bg-slate-200/70 ${className}`} />;

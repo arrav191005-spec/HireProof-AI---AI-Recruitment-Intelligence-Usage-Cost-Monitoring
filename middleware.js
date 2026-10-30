@@ -29,6 +29,24 @@ export async function middleware(request) {
 
   let response = NextResponse.next({ request });
 
+  // No Supabase session cookie → there is nothing for GoTrue to validate, so
+  // skip the getUser() network round-trip entirely. This makes anonymous
+  // /login, /signup and blocked-page hits as cheap as possible on the Workers
+  // CPU budget. With a cookie present the full check below runs unchanged
+  // (it is also what refreshes an expired access token via the refresh token).
+  const hasSessionCookie = request.cookies
+    .getAll()
+    .some(({ name }) => name.startsWith('sb-'));
+
+  if (!hasSessionCookie) {
+    if (isProtected) {
+      const loginUrl = new URL('/login', request.url);
+      loginUrl.searchParams.set('next', pathname + request.nextUrl.search);
+      return NextResponse.redirect(loginUrl);
+    }
+    return response;
+  }
+
   const supabase = createServerClient(url, key, {
     cookies: {
       getAll() {
