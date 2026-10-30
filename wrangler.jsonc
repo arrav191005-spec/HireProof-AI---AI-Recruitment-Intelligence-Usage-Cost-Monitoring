@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "main": ".open-next/worker.js",
+  "main": "worker.js",
   "name": "hireproof-ai",
   "compatibility_date": "2025-09-01",
   "compatibility_flags": [
@@ -34,6 +34,12 @@
       "service": "hireproof-ai"
     }
   ],
+  // Exposes the deployed version id to worker.js, which folds it into the
+  // response-cache key. A new deploy therefore starts with a clean cache
+  // instead of serving HTML that points at the previous build's assets.
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
   // Observability lives in this file because `wrangler deploy` pushes it as
   // the source of truth — without it, every deploy silently turns off the
   // dashboard's Workers Logs / traces / real-time Issues that were enabled
@@ -48,6 +54,11 @@
   // `wrangler secret put`, never into this file).
   "vars": {
     "AUTH_MODE": "supabase",
-    "AI_SERVICE_URL": "https://hireproof-documents.onrender.com"
+    "AI_SERVICE_URL": "https://hireproof-documents.onrender.com",
+    // Public by design (the browser receives both values). The wrapper needs
+    // them to read the session cookie before OpenNext runs; Next itself inlines
+    // the same values into the app bundle at build time.
+    "NEXT_PUBLIC_SUPABASE_URL": "https://obtwssocxawrcjipiehw.supabase.co",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_XbdTuqKK7hcPlAbhhkkrdQ_ntyfu0s-"
   }
 }

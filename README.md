@@ -127,9 +127,44 @@ access only works through the server.
 
 ## Performance on Workers Free
 
-The deployment runs on Cloudflare Workers **Free** (10 ms CPU per request).
-Instead of upgrading, the app was engineered to fit: every change below was
-driven by `wrangler tail` cpuTime measurements per route.
+Cloudflare Workers **Free** allows 10 ms of CPU per request and gives each
+isolate a small rollover bank: unused time carries over, but once the bank is
+empty every following request is terminated with Error 1102 until a fresh
+isolate appears. A Next.js SSR render costs 60–554 ms, so re-rendering on every
+navigation cannot fit. The deployment therefore does two things: it minimises
+the work per render, and it avoids rendering at all on repeat navigation.
+
+### Response cache (the load-bearing change)
+
+- **`worker.js` checks the edge cache before OpenNext.** A hit costs a local
+  cookie read plus one Cache API lookup: **1–4 ms measured** (a 7 ms and a
+  16 ms outlier were observed on the largest documents), with no middleware,
+  no GoTrue call and no React render. Misses fall through to OpenNext
+  unchanged.
+- **`middleware.js` verifies the session on misses** and tags the response with
+  `x-hp-cache-key`; the wrapper stores a stripped copy (never `Set-Cookie`) for
+  **900 s** and serves the live response with `Cache-Control: private,
+  no-store`.
+- **Keys are scoped tightly:** deploy version, user id, access-token hash,
+  per-browser `hp-v` version, URL/query and router state. A hit can only be
+  produced by the exact token that was verified when the entry was written;
+  entries are never shared across users, sessions or colos. The deploy version
+  means a release never serves HTML that points at the previous build's assets.
+- **A user's own write invalidates their cache immediately.** Any successful
+  non-GET except the read-only search POST and analytics GETs bumps the
+  per-browser `hp-v` cookie, so the next navigation misses and sees fresh data.
+- **Navigation is full-document, not RSC.** App links render a plain `<a>`
+  (`components/ui/NoPrefetchLink.jsx`). RSC payloads are keyed by the source
+  page's `next-router-state-tree`, so they cannot be reliably warmed; document
+  URLs are stable and cacheable. This also eliminates Next's link-prefetch
+  burst, which previously fired ~1.4 s of CPU for the whole sidebar on one
+  dashboard view.
+- **Warming works.** Because a cache hit costs less than the 10 ms grant, each
+  hit leaves rollover CPU behind; the main and detail routes were warmed on a
+  fresh isolate by alternating first renders with cheap hits. Warming is an
+  operational aid, not part of the app's request path.
+
+### Data and render work reduction
 
 - **No N+1 and no whole-corpus loads on list pages.** `/candidates` uses
   `listSkillVocab()` (one distinct-skill query) and `candidateRollups()` (two
@@ -144,43 +179,51 @@ driven by `wrangler tail` cpuTime measurements per route.
   connection. Verified byte-identical to the previous implementation against
   the live database.
 - **Per-isolate read-through cache** (`lib/repo/index.js`): 15 s TTL, promise
-  dedupe, 128 entries, invalidated by any write through a version guard. Warm
-  pages reuse rows instead of re-querying Supabase; all 12 mutation sites call
-  `router.refresh()` and sign-out is a hard navigation.
+  dedupe, 128 entries, invalidated by any write through a version guard.
 - **Charts render client-side only.** Recharts loads through `next/dynamic`
   (`ssr: false`, height-matched skeletons), so the server never serializes
   chart markup and the JS comes from immutable static assets.
-- **Link prefetching is disabled** (`components/ui/NoPrefetchLink.jsx`).
-  Next.js otherwise prefetches every visible link: opening the dashboard fired
-  RSC prefetches for the whole sidebar (~1.4 s CPU in one burst), which heated
-  the isolate until the next navigation was killed with Error 1102. Clicking
-  still navigates client-side in one request.
-- **Router cache** (`experimental.staleTimes: { dynamic: 15, static: 180 }`):
-  back/forward and revisits within 15 s are served from the client cache with
-  **zero worker invocations** (confirmed via `wrangler tail`).
 - **Middleware skips the GoTrue round-trip when there is no `sb-` cookie** —
   anonymous hits on `/login`, `/signup` and blocked pages cost 2–5 ms.
 
-Measured with `wrangler tail` (cpuTime, single navigation on a cold isolate):
+### Measured on the live deployment
 
-| Route | Before | After |
+`cpuTime` from `wrangler tail` on the live deployment. First renders were
+measured on `64f3a4df`; `9c1fe307` only changed cache-key scoping and 404
+storage, so the render path is identical. Hits were re-measured on `9c1fe307`:
+
+| Route | First render (miss) | Repeat (hit) |
 |---|---|---|
-| `/candidates/[id]` document | 494–498 ms — and 1102-killed | **77 ms** |
-| `/analytics` document | 167–599 ms | **80 ms** |
-| `/` document | 46–434 ms | 76–221 ms |
-| `/candidates` RSC nav | 305–425 ms | 95–99 ms |
-| `/jobs` RSC nav | 121–379 ms | 57–76 ms |
-| Back / forward | full re-render | **0 invocations** |
-| Dashboard visit | +5–6 prefetch invocations (~1.4 s) | **0 prefetches** |
+| `/` | 146–229 ms | 1–4 ms |
+| `/candidates` | 229 ms | 1–5 ms |
+| `/candidates/[id]` | 119–227 ms | 1–4 ms |
+| `/jobs` | 61–99 ms | 1–4 ms |
+| `/jobs/[id]` | 96–119 ms | 1–2 ms |
+| `/assessments` | 554 ms | 2–4 ms |
+| `/assessments/[id]` | 62–92 ms | 2–3 ms |
+| `/analytics` | 91 ms | 2–16 ms |
+| `/search` | 93 ms | 2 ms |
+| `/settings` | 98 ms | 1–7 ms |
 
-A cold isolate still exceeds 10 ms on first render; Cloudflare tolerates brief
-overages and terminates requests only once an isolate is hot. Cutting
-per-request work *and* the prefetch burst is what keeps it cool under real
-navigation — zero `exceededCpu` outcomes were observed after these changes.
+Three browser sweeps on `9c1fe307` (24, 13 and 12 real anchor navigations)
+returned the expected page with 200 for every navigation. `wrangler tail`
+captured document hits at **1–7 ms worker CPU** and no `exceededCpu` events for
+this build. (One request in an earlier sweep was reported as `canceled` because
+the test clicked the next link before the previous page's assets finished; it
+was not a CPU kill. Cloudflare Tail samples under bursts, so not every sweep
+request appears in the event log.)
+
+**This is a best-effort fit, not a guarantee.** A cache miss still costs
+60–554 ms — 6–55× the per-request budget. The rollover bank tolerates a handful
+of misses, but a cold session that opens more than roughly 15 expensive pages
+in a burst can still exhaust it and produce 1102. The cache is per-colo,
+per-user and token-bound, so a new login, a token refresh or a new deploy starts
+cold. Guaranteed uptime on this stack requires Workers Paid (or moving
+rendering off Workers); this configuration is tuned for a demo, not an SLA.
 
 ---
 
-## Test results (2026-10-30)
+## Test results (2026-10-31)
 
 | Suite | Result | What it covers |
 |---|---|---|
@@ -221,9 +264,20 @@ npm run preview     # local workerd on :8787 (reads .dev.vars, gitignored)
 npm run deploy      # opennextjs-cloudflare build + wrangler deploy
 ```
 
+- `main` points at **`worker.js`**, a small wrapper around the OpenNext handler
+  that implements the edge response cache. It imports `.open-next/worker.js`,
+  so run it only after `opennextjs-cloudflare build` (the `preview`/`deploy`
+  scripts do this).
 - Non-secret vars live in `wrangler.jsonc`: `AUTH_MODE=supabase`,
-  `AI_SERVICE_URL=https://hireproof-documents.onrender.com`.
+  `AI_SERVICE_URL=https://hireproof-documents.onrender.com`, and the
+  browser-public `NEXT_PUBLIC_SUPABASE_URL` /
+  `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` that the wrapper needs before OpenNext
+  runs. The publishable key is safe in the client bundle; the service-role key
+  is never used or committed.
 - `DATABASE_URL` is a **secret**: `grep '^DATABASE_URL=' .env.local | cut -d= -f2- | tr -d '"' | npx wrangler secret put DATABASE_URL`
+- `version_metadata.binding = CF_VERSION_METADATA` exposes the deployed version
+  id to `worker.js`, which folds it into the cache key. A new deploy therefore
+  starts with a clean cache instead of serving HTML from the previous build.
 - `compatibility_flags: ["nodejs_compat"]` — `node:net`/`node:tls` shims are
   what let `pg` open TCP to the Supabase pooler from workerd.
   `global_fetch_strictly_public` is deliberately omitted so preview can call
@@ -303,21 +357,31 @@ fresh-page console clean.
   (~30 s cold start; the Settings probe may transiently show "not running").
 - **No rate limiting or CSRF hardening** beyond SameSite cookies — fine for a
   demo, add a gateway before real traffic.
-- **Link prefetching is intentionally off.** Navigating between app pages
-  fetches the target page once on click instead of the browser preloading every
-  visible link. This trades a small amount of per-click latency for not running
-  the whole sidebar's data queries on every page view — the prefetch burst was
-  the direct cause of Workers CPU kills.
-- **Cached reads are bounded, not real-time.** The per-isolate read cache has a
-  15 s TTL. Any write through the repo invalidates cached reads on that isolate,
-  but a second isolate can serve rows up to 15 s old. Acceptable for a
-  recruiting dashboard; tighten the TTL if multi-isolate freshness matters.
-- **Free-plan CPU is still a hard ceiling.** The 10 ms limit is per-request and
-  Cloudflare only terminates requests once an isolate is hot; a cold isolate's
-  first render necessarily exceeds it. Measurements above are single-navigation
-  `cpuTime` on cold isolates, and a burst of expensive requests can still
-  exhaust the budget — this architecture minimizes the work per request, it
-  does not remove the limit.
+- **App navigation reloads the document.** `NoPrefetchLink` renders a plain
+  `<a>`, because stable document URLs are cacheable and pre-warmable while RSC
+  payloads are keyed by the source page's router tree. The trade-off is a full
+  page reload (client router state is discarded) and a 60–554 ms render on a
+  cache miss. Prefetching is deliberately off — Next's prefetch burst alone
+  cost ~1.4 s CPU and caused 1102s.
+- **The response cache is per-session, per-colo and best-effort.** Entries are
+  keyed by deploy version, user, access-token hash, `hp-v` and URL; they expire
+  after 15 minutes and only exist after a page has rendered once. A fresh
+  login, a token refresh or a new deploy starts cold, so a burst of roughly 15+
+  expensive first views can still exhaust the Free plan's rollover CPU bank and
+  return 1102. Guaranteed uptime needs Workers Paid or rendering off Workers.
+- **Cache hits do not re-check GoTrue.** An entry is readable only with the
+  exact access token that was verified when it was written, but a revoked
+  session holding an unexpired token can read cached pages until the token
+  expires or the 15-minute TTL elapses. A user's own writes invalidate
+  immediately; another recruiter's writes can take up to 15 minutes to appear.
+- **Cached reads are bounded, not real-time.** The per-isolate repo cache has a
+  15 s TTL. Any write through the repo invalidates reads on that isolate, but a
+  second isolate can serve rows up to 15 s old. The response cache adds the
+  15-minute cross-user window described above. Acceptable for a demo; tighten
+  both TTLs if freshness matters.
+- **Free-plan CPU is a hard ceiling.** The 10 ms limit is enforced through a
+  per-isolate rollover bank; once the bank is empty, even a 404 returns 503.
+  Caching changes the average cost of a session, not the limit itself.
 
 ---
 

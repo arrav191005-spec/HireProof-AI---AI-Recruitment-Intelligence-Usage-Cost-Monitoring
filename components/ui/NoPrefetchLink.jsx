@@ -1,17 +1,20 @@
-// Link wrapper with prefetching disabled.
+// Full-page link for app navigation.
 //
-// Why: on Cloudflare Workers Free (10 ms CPU/request) every prefetch is a full
-// worker invocation that runs the target page's data queries. Loading the
-// dashboard used to fire RSC prefetches for the whole sidebar (/jobs,
-// /candidates, /assessments, …) — ~1.4 s of CPU in one burst — which heated
-// the isolate until the next navigation was killed with Error 1102. Prefetching
-// pages the user has not asked for is exactly the kind of eager loading this
-// app avoids. Client-side navigation still works normally: clicking fetches the
-// RSC payload once, and `experimental.staleTimes.dynamic` keeps it cached for
-// 15 s afterwards.
-import Link from 'next/link';
-
-export default function NoPrefetchLink(props) {
-  // Callers may still opt in explicitly by passing prefetch={true}.
-  return <Link prefetch={false} {...props} />;
+// Why not next/link: RSC navigations are keyed by the source page's
+// `next-router-state-tree`, so their cache entries cannot be shared or
+// pre-warmed reliably — and on Workers Free every cache miss is an 80–800 ms
+// render that drains the isolate's CPU bank. A document navigation has a
+// stable URL, so the edge response cache (worker.js + middleware.js) serves it
+// in 3–9 ms. The browser keeps the old page visible until the new HTML is
+// ready, so the UX is a normal page load rather than a blank flash.
+//
+// `prefetch`/`replace`/`scroll` are Link-only props and are intentionally not
+// forwarded to the anchor.
+export default function NoPrefetchLink({ href, children, replace, scroll, prefetch, ...rest }) {
+  const url = typeof href === 'string' ? href : href?.toString?.() ?? '#';
+  return (
+    <a href={url} {...rest}>
+      {children}
+    </a>
+  );
 }

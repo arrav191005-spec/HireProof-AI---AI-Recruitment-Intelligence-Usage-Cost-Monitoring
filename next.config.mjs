@@ -3,13 +3,12 @@ const nextConfig = {
   // pg uses dynamic requires that must stay external to the server bundle
   serverExternalPackages: ['pg'],
   experimental: {
-    // Client-side router cache: back-navigation and revisits within 15 s reuse
-    // the already-fetched RSC payload instead of invoking the Worker again —
-    // on the free plan every avoided request is 10 ms of CPU not spent.
-    // Safe here because all 12 mutation sites call router.refresh() and
-    // sign-out performs a hard navigation (window.location), which drops the
-    // entire client cache — cached entries cannot outlive a change or a
-    // session. Bounded at 15 s regardless.
+    // The client router cache only covers the remaining RSC transitions (the
+    // login/signup handoff and post-mutation router.push/router.refresh calls).
+    // App navigation is a full document load served by the edge response cache,
+    // so this is a small safety detail rather than the main caching layer.
+    // Mutations call router.refresh(), and sign-out performs a hard navigation,
+    // so entries cannot outlive a change or a session; bounded at 15 s anyway.
     staleTimes: { dynamic: 15, static: 180 },
   },
 };
