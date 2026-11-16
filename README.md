@@ -29,7 +29,7 @@ clearly labeled in every response, never faked.
 ### Tests
 
 ```bash
-npm test                          # 59/59 — extraction, repo, search engine, validation
+npm test                          # 66/66 — extraction, repo, search engine, validation
 python-service/.venv/bin/python python-service/tests/test_extraction.py   # 22/22
 node database/smoke-test.js       # 74/74 — live Postgres parity + mutations
 npm run eval:search               # P@5 0.47 · R@5 0.95 · MRR 1.00 on the judged set
@@ -65,7 +65,7 @@ app/                     Next.js App Router
   (app)/                 Authenticated shell (sidebar + header)
   login/                 Sign-in page (Supabase mode)
   signup/                Sign-up page (Supabase mode; confirmation-aware)
-  api/                   18 route handlers (candidates, jobs, search, evidence,
+  api/                   19 route handlers (candidates, jobs, search, evidence,
                          assessments, resumes, analytics, health)
 components/              UI (ui/, layout/, candidates/, evidence/, assessments/…)
 lib/
@@ -103,9 +103,17 @@ are downgraded, never invented.
 
 ### Search
 
-Natural-language or keyword queries, matched against skills, experience and
-requirement evidence with a transparent per-factor score breakdown. No
-"AI match %". Evaluated on a judged query set (`npm run eval:search`).
+The UI ranks candidates **in the browser**. `/search` embeds a privacy-trimmed
+corpus (no email, resume text or submission answers) in the cached document;
+`lib/search/engine.js` — the same pure engine used by the API and tests —
+filters and scores it locally. A search therefore makes zero Worker requests
+and cannot hit the Free-plan CPU ceiling. History is a best-effort
+`POST /api/search/event` write, deliberately outside the search path.
+
+`POST /api/search` remains available for API clients and returns the same
+ranked shape. Matching uses skills, experience and requirement evidence with a
+transparent per-factor breakdown. No "AI match %". Evaluated on a judged query
+set (`npm run eval:search`).
 
 ### Authentication
 
@@ -223,11 +231,11 @@ rendering off Workers); this configuration is tuned for a demo, not an SLA.
 
 ---
 
-## Test results (2026-10-31)
+## Test results (2026-11-16)
 
 | Suite | Result | What it covers |
 |---|---|---|
-| `npm test` | **59/59 pass** | Extraction (ISO dates, education split, grounding), repo memory-parity, search engine, validation schemas |
+| `npm test` | **66/66 pass** | Extraction (ISO dates, education split, grounding), repo memory-parity, search engine + client-corpus projection, validation schemas |
 | Python extraction | **22/22 pass** | Date-range formats (ISO/month/plain), role summaries, education years, grounding, plausibility guards |
 | `node database/smoke-test.js` | **74/74 pass** | Live Postgres read parity vs oracle, all mutations, RLS/grants, row-count restore |
 | `npm run eval:search` | P@5 **0.47** · R@5 **0.95** · MRR **1.00** | Judged query set against the live engine (results are honestly mediocre — see limitations) |

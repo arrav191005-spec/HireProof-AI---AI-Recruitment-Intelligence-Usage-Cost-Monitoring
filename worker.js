@@ -41,6 +41,10 @@ const CACHE_VERSION_COOKIE = 'hp-v';
 function shouldInvalidate(method, pathname) {
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
   if (pathname === '/api/search') return false;
+  // Search history is append-only analytics, not a change to jobs/candidates.
+  // Invalidating every cached page after a search would force expensive
+  // re-renders for no user-visible data change.
+  if (pathname === '/api/search/event') return false;
   if (pathname.startsWith('/api/analytics/')) return false;
   return true;
 }

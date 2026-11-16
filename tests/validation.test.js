@@ -5,6 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   searchRequestSchema,
+  searchEventSchema,
   candidateCreateSchema,
   jobCreateSchema,
   evidenceReviewSchema,
@@ -59,6 +60,24 @@ test('searchRequestSchema defaults let a minimal body through', () => {
   assert.equal(parsed.query, '');
   assert.equal(parsed.page, 1);
   assert.deepEqual(parsed.filters, {});
+});
+
+// --- searchEventSchema ----------------------------------------------------------
+
+test('searchEventSchema accepts the payload the browser records', () => {
+  const parsed = searchEventSchema.parse({
+    query: 'senior react engineer',
+    mode: 'keyword+requirement',
+    resultCount: 7,
+  });
+  assert.equal(parsed.query, 'senior react engineer');
+  assert.equal(parsed.resultCount, 7);
+});
+
+test('searchEventSchema rejects empty queries and impossible counts', () => {
+  assert.equal(searchEventSchema.safeParse({ query: '   ', resultCount: 1 }).success, false);
+  assert.equal(searchEventSchema.safeParse({ query: 'x', resultCount: -1 }).success, false);
+  assert.equal(searchEventSchema.safeParse({ query: 'x', mode: 'made-up', resultCount: 0 }).success, false);
 });
 
 // --- candidateCreateSchema ------------------------------------------------------

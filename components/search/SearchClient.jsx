@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from '@/components/ui/NoPrefetchLink';
-import { useRouter } from 'next/navigation';
+import { searchCandidates } from '@/lib/search/engine';
 import {
   Search, Sparkles, SlidersHorizontal, Users, MapPin, Briefcase, History,
   ChevronDown, ChevronUp, FileText, FlaskConical, AlertTriangle, Info,
@@ -156,7 +156,7 @@ function RequirementLines({ matched, unestablished, candidateId }) {
 }
 
 // --- One search result -------------------------------------------------------
-function ResultCard({ result, jobRequirements }) {
+function ResultCard({ result }) {
   const { candidate, skills, score, scoreComponents: c, experience = [], projects = [] } = result;
   const matchedSkills = skills.slice(0, 7);
   const extra = skills.length - matchedSkills.length;
@@ -313,8 +313,18 @@ function FiltersPanel({ filters, setFilters, allSkills, onApply, jobs, jobId, se
 }
 
 // --- Main client -------------------------------------------------------------
-export default function SearchClient({ initialQuery = '', initialJobId = '', jobs = [], allSkills = [] }) {
-  const router = useRouter();
+const PAGE_SIZE = 6;
+
+export default function SearchClient({
+  initialQuery = '',
+  initialJobId = '',
+  jobs = [],
+  allSkills = [],
+  corpus = [],
+  initialHistory = [],
+  backend = 'unknown',
+  apiSemanticEnabled = false,
+}) {
   const [query, setQuery] = useState(initialQuery);
   const [jobId, setJobId] = useState(initialJobId);
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
@@ -324,54 +334,93 @@ export default function SearchClient({ initialQuery = '', initialJobId = '', job
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showFilters, setShowFilters] = useState(true);
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState(initialHistory);
   const [historyOpen, setHistoryOpen] = useState(false);
   const started = useRef(false);
+  const recordedQuery = useRef(null);
+  const jobIndex = useMemo(() => new Map(jobs.map((j) => [j.id, j])), [jobs]);
 
+  // Ranking runs against the corpus embedded in this page. This is the whole
+  // point of the local index: a search is a pure function, not a Worker
+  // request, so it cannot hit the Free-plan CPU ceiling or return a 503.
   const runSearch = useCallback(
-    async ({ q = query, jid = jobId, f = filters, p = 1 } = {}) => {
+    ({ q = query, jid = jobId, f = filters, p = 1 } = {}) => {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch('/api/search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: q, jobId: jid || null, filters: f, page: p, pageSize: 6 }),
+        const job = jid ? jobIndex.get(jid) ?? null : null;
+        const jobRequirements = job?.requirements?.length ? job.requirements : null;
+        const out = searchCandidates(corpus, {
+          query: q,
+          jobId: jid || null,
+          jobRequirements,
+          filters: f,
         });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(body?.error?.message ?? `Search failed (${res.status})`);
-        setData(body.data ?? body);
-        setMeta(body.meta ?? null);
-        setPage(p);
-        // Keep the URL shareable without re-triggering a server round-trip
+
+        const total = out.results.length;
+        const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+        const safePage = Math.min(Math.max(1, p), pageCount);
+
+        setData({
+          results: out.results.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+          parsedQuery: out.parsed,
+          job: job ? { id: job.id, title: job.title, requirements: job.requirements ?? [] } : null,
+        });
+        setMeta({
+          mode: 'keyword + requirement evidence (ranked in your browser)',
+          backend,
+          apiSemanticEnabled: Boolean(apiSemanticEnabled),
+          total,
+          page: safePage,
+          pageCount,
+        });
+        setPage(safePage);
+
+        // Keep the URL shareable without re-triggering a server round-trip.
         const params = new URLSearchParams();
         if (q) params.set('q', q);
         if (jid) params.set('jobId', jid);
         window.history.replaceState(null, '', `${window.location.pathname}${params.toString() ? `?${params}` : ''}`);
-        // Refresh history (the route records non-empty queries server-side)
-        fetch('/api/search')
-          .then((r) => r.json())
-          .then((b) => setHistory(b?.data?.history ?? b?.history ?? []))
-          .catch(() => {});
+
+        // History is a convenience, never part of the search path. Record at
+        // most one event per query per session and ignore every failure, so a
+        // history outage can never surface as "Search failed".
+        const trimmed = q.trim();
+        if (trimmed && trimmed !== recordedQuery.current) {
+          recordedQuery.current = trimmed;
+          fetch('/api/search/event', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              query: trimmed,
+              mode: out.mode === 'browse' ? 'browse' : 'keyword+requirement',
+              resultCount: total,
+            }),
+          })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((body) => {
+              const event = body?.data?.event ?? body?.event;
+              if (!event) return;
+              setHistory((h) => [event, ...h.filter((x) => x.id !== event.id)].slice(0, 8));
+            })
+            .catch(() => {});
+        }
       } catch (err) {
-        setError(err.message);
+        setError(err?.message ?? 'Search failed');
         setData(null);
         setMeta(null);
       } finally {
         setLoading(false);
       }
     },
-    [query, jobId, filters]
+    [query, jobId, filters, corpus, jobIndex, backend, apiSemanticEnabled]
   );
 
-  // Initial search from URL params (?q= / ?jobId=)
+  // Initial search from URL params (?q= / ?jobId=). History is already in the
+  // server-rendered document, so no extra API round-trip is needed.
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    fetch('/api/search')
-      .then((r) => r.json())
-      .then((b) => setHistory(b?.data?.history ?? b?.history ?? []))
-      .catch(() => {});
     if (initialQuery || initialJobId) {
       runSearch({ q: initialQuery, jid: initialJobId, f: EMPTY_FILTERS, p: 1 });
     }
@@ -495,10 +544,12 @@ export default function SearchClient({ initialQuery = '', initialJobId = '', job
 
       {/* ---- Mode honesty banner ---- */}
       {meta && (
-        <InlineAlert tone={meta.semanticEnabled ? 'success' : 'info'} title={meta.semanticEnabled ? 'Hybrid search active' : 'Keyword + requirement-evidence search'}>
-          {meta.semanticEnabled
-            ? 'Embeddings are configured: semantic similarity is combined with keyword and requirement-evidence ranking.'
-            : 'Semantic search is not configured in this environment — ranking uses exact skill matching, PostgreSQL-style keyword overlap and requirement-level evidence. No semantic results are being faked.'}
+        <InlineAlert tone="info" title="Keyword + requirement-evidence search">
+          Ranking runs locally in your browser against the search index embedded in this page, so searching never
+          re-renders on the Worker. It uses exact skill matching, profile-text keyword overlap and requirement-level
+          evidence. Indexed <strong>{corpus.length}</strong> candidate record{corpus.length === 1 ? '' : 's'}.
+          {meta.apiSemanticEnabled &&
+            ' Embeddings are configured for API clients, but this page does not use them — no hybrid result is being claimed here.'}
           {' '}Data backend: <strong>{meta.backend}</strong>.
         </InlineAlert>
       )}
@@ -554,8 +605,8 @@ export default function SearchClient({ initialQuery = '', initialJobId = '', job
               {data.job && (
                 <span className="text-slate-500">
                   {' '}— ranking against <strong>{data.job.title}</strong> requirements
-                  ({data.job.requirements.filter((r) => r.category === 'required').length} required,{' '}
-                  {data.job.requirements.filter((r) => r.category === 'preferred').length} preferred)
+                  ({(data.job.requirements ?? []).filter((r) => r.category === 'required').length} required,{' '}
+                  {(data.job.requirements ?? []).filter((r) => r.category === 'preferred').length} preferred)
                 </span>
               )}
             </p>
