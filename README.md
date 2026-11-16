@@ -82,6 +82,7 @@ database/                Migrations (17 tables + optional pgvector), seed,
 storage/resumes/         Uploaded PDFs + extraction metadata (gitignored)
 tests/                   Node test suite + fixtures + judged search set
 docs/auth.md             How authentication works in both modes
+docs/vp-review/          Executive review deck, PDF, screenshots, build script
 ```
 
 ### Evidence statuses (exact vocabulary)
@@ -257,19 +258,33 @@ navigation drawer.
 
 ## Deployment (live)
 
+> **Current status (2026-11-16):** the live Worker runs the current build in
+> **demo mode** — `AUTH_MODE=demo`, in-memory synthetic data, no sign-in
+> required. The managed Supabase project
+> (`obtwssocxawrcjipiehw.supabase.co`) is offline: DNS returns NXDOMAIN and the
+> pooler reports the tenant/user no longer exists, so Postgres and GoTrue are
+> unavailable. Deployed version `4847b4df-bf12-45c4-b66a-1fe10ffa7919`.
+>
+> The override is passed on the command line and is **not** persisted in
+> `wrangler.jsonc`, which still declares `AUTH_MODE=supabase`. Use
+> `npm run deploy:demo` while Supabase is down; a plain `npm run deploy` will
+> rebuild against the unavailable auth service and fail closed at `/login`.
+
 | Piece | Where | URL |
 |---|---|---|
 | Next.js frontend + API | Cloudflare Workers (OpenNext) | https://hireproof-ai.hireproof-ai.workers.dev |
 | Python document service | Render (Free, Singapore) | https://hireproof-documents.onrender.com |
-| PostgreSQL + Auth | Supabase (Tokyo, pooler `:6543`) | — |
+| Local preview + document service | This machine (demo) | http://localhost:8787 · http://127.0.0.1:8000 |
+| PostgreSQL + Auth | Supabase (Tokyo, pooler `:6543`) | offline — see status above |
 
 ### Cloudflare Workers (frontend)
 
 Built with `@opennextjs/cloudflare` + wrangler:
 
 ```bash
-npm run preview     # local workerd on :8787 (reads .dev.vars, gitignored)
-npm run deploy      # opennextjs-cloudflare build + wrangler deploy
+npm run preview      # local workerd on :8787 (reads .dev.vars, gitignored)
+npm run deploy       # opennextjs-cloudflare build + wrangler deploy
+npm run deploy:demo  # same, with AUTH_MODE=demo while Supabase is offline
 ```
 
 - `main` points at **`worker.js`**, a small wrapper around the OpenNext handler
@@ -304,7 +319,20 @@ npm run deploy      # opennextjs-cloudflare build + wrangler deploy
   Settings probe uses a 1.5 s timeout, so a cold instance can transiently show
   "not running" — refresh once it wakes.
 
-### Verified live (2026-10-28)
+### Verified live (2026-11-16, demo mode)
+
+- `GET /` → **200**, `GET /search?q=react` → **200**, `GET /api/health` →
+  `dataBackend: "memory"`, `aiMode: "demo"`.
+- Browser search on the public URL: **10 candidates matched**, first result
+  Elena Petrova, no `Search failed` and no 503; the only `/api/*` request is
+  the best-effort `POST /api/search/event`.
+- Both local services verified on the same build: preview on `:8787` and the
+  FastAPI document service on `:8000` (`{"status":"ok", ...}`).
+- Known gap: the Worker runs synthetic demo data, not Postgres. Nothing on the
+  live site claims otherwise — the demo banner and "Data backend: memory" are
+  rendered by the app itself.
+
+### Historical verification (2026-10-28, Supabase-backed)
 
 Browser end-to-end on the deployed workers.dev URL: `/api/health` →
 `dataBackend: postgres` · sign-in → Overview with no demo banner (12
@@ -318,6 +346,12 @@ fresh-page console clean.
 
 ## Known limitations
 
+- **The live deployment currently runs in demo mode.** The managed Supabase
+  project is offline (NXDOMAIN), so the public Worker was deployed with
+  `AUTH_MODE=demo` and the in-memory synthetic store. It is labeled as such in
+  the UI; it is not a production environment. `npm run deploy` (without
+  `:demo`) targets the Supabase path and will fail closed until the project is
+  restored or replaced.
 - **Search quality is a baseline.** P@5 0.47 on the judged set — the ranking is
   keyword+evidence matching, not a trained model. The eval numbers are shown
   in the UI exactly as measured; they are not marketed up.

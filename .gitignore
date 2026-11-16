@@ -13,3 +13,6 @@ storage/
 __pycache__/
 *.pyc
 .venv/
+
+# Generated screenshot cards for the VP review deck (build_deck.py recreates them)
+docs/vp-review/assets/

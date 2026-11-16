@@ -10,6 +10,7 @@
     "start": "next start -p 3000",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "deploy:demo": "opennextjs-cloudflare build && wrangler deploy --var AUTH_MODE:demo",
     "test": "node --import ./tests/helpers/register-alias.mjs --test \"tests/*.test.js\"",
     "db:migrate": "node database/run-migrations.js",
     "db:seed": "node database/seed.js",
