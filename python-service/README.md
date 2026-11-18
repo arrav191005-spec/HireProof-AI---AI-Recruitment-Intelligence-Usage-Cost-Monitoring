@@ -81,6 +81,47 @@ application database. This schema is not yet wired into authorization;
 verification endpoints remain disabled. A non-owner, non-BYPASSRLS database
 role and scoped policies must be provisioned before private APIs are enabled.
 
+### Scoped PostgreSQL reads (development)
+
+`GET /api/v2/candidates/me`, `/api/v2/candidates/me/projects`,
+`/api/v2/recruiter/workspaces`, and
+`/api/v2/recruiter/workspaces/{workspace_id}/jobs` use `V2_DATABASE_URL`, a
+separate restricted PostgreSQL login. The server verifies its JWT first, then
+sets `app.subject` locally within a transaction. Candidate ownership and
+workspace membership are looked up server-side. Access is denied when no link
+exists; no existing profile or job is automatically assigned. Recruiter RLS
+access to a candidate is limited to candidates with an application for a job
+linked to the recruiter's workspace.
+
+`database/provision-v2-role.sql` creates a cluster-wide NOLOGIN group role
+`hireproof_v2_access` and must be run by a database administrator **only after
+review**. A separately managed LOGIN role can inherit that group; store its
+credentials in the server's `V2_DATABASE_URL` secret. It must not own tables,
+be superuser, have BYPASSRLS, CREATEROLE or public-schema CREATE privileges.
+Migration 005 grants this group read-only access under RLS; it grants no writes.
+The service checks role properties before scoped reads. Database credentials
+must never reach clients: anyone with the database login can set `app.subject`
+directly. Role and schema configuration must be verified before deployment.
+Provisioning users, workspaces, candidate links, invitations, and write APIs
+are not implemented. Existing legacy APIs still use their own database
+connection; they are not covered by these new policies and must be secured or
+retired separately.
+
+#### Migration and recovery safety
+
+The application database currently has migrations 001 and 002. Migrations 003,
+004 and 005 are pending; the migration runner applies all pending files, and
+005 requires the group role to exist first. Do not run the runner or role
+provisioning against a shared database without explicit approval. Check
+`schema_migrations` checksums against repository files, inspect ownership and
+role settings, and test the complete sequence on an isolated database first.
+Before an approved change, take a provider-supported backup or a `pg_dump`
+custom-format backup using a privileged migration account, store it encrypted
+with restricted access, and validate it with `pg_restore --list`. Rehearse
+recovery into a **new isolated database**, verify records and roles there, and
+follow the provider's approved restore procedure; do not overwrite a live
+database as a test. Backup/restore has not been performed by this project.
+
 ### PostgreSQL configuration
 
 The Python service reads `DATABASE_URL` from its **process environment**; it
