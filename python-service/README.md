@@ -102,15 +102,50 @@ Migration 005 grants this group read-only access under RLS; it grants no writes.
 The service checks role properties before scoped reads. Database credentials
 must never reach clients: anyone with the database login can set `app.subject`
 directly. Role and schema configuration must be verified before deployment.
-Provisioning users, workspaces, candidate links, invitations, and write APIs
+Trusted identity, workspace and membership provisioning and invitations
 are not implemented. Existing legacy APIs still use their own database
 connection; they are not covered by these new policies and must be secured or
 retired separately.
 
+### Scoped write foundation (not production provisioning)
+
+Migrations 006 and 007 add limited student profile/project writes and
+workspace-member job title writes. `POST /api/v2/candidates/me` creates a new
+profile only for a pre-provisioned trusted `users` row whose `auth_user_id`
+matches the verified JWT subject and whose server-managed role is `candidate`.
+The request cannot choose an owner, role, or existing candidate. Concurrent
+requests serialize on the user row and return the same candidate. Profile
+updates and project creates/updates require ownership. Project repository
+references and verification results cannot be written by these endpoints.
+
+Existing workspace members can create **draft** jobs and edit their titles;
+they cannot change membership, workspace links, or job status. A trusted
+operator must establish the first workspace, administrator membership, and
+provider-to-user mappings outside the public API after independent identity
+verification and an approved authorization process. No automated bootstrap,
+recruiter-profile provisioning, invitation, acceptance, revocation endpoint, or
+workspace creation API exists yet. Never provision an administrator based on
+user-editable JWT metadata.
+
+Student create/update, project create/update, and job create/update write audit
+records in the same database transaction. Metadata records field names rather
+than profile contents. The restricted runtime role cannot modify audit history.
+Legacy changes and authorization failures are not comprehensively audited.
+Database administrators can still alter audit records; this is not an
+independent tamper-proof audit store.
+
+The legacy Next.js routes under `app/api/candidates`, `app/api/resumes`,
+`app/api/evidence`, `app/api/applications`, `app/api/jobs`, `app/api/search`,
+`app/api/assessments`, and `app/api/analytics` use the legacy repository and
+shared recruiter authentication, not V2 ownership/workspace policies. They
+must not be exposed alongside real private V2 data without a separate security
+review, isolation, or migration. Existing demo mode is not authentication.
+These routes were not changed in this phase.
+
 #### Migration and recovery safety
 
-The application database currently has migrations 001 and 002. Migrations 003,
-004 and 005 are pending; the migration runner applies all pending files, and
+The application database currently has migrations 001 and 002. Migrations 003
+through 007 are pending; the migration runner applies all pending files, and
 005 requires the group role to exist first. Do not run the runner or role
 provisioning against a shared database without explicit approval. Check
 `schema_migrations` checksums against repository files, inspect ownership and

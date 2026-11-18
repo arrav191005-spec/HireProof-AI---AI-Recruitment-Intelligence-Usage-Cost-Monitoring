@@ -108,9 +108,11 @@ class ScopedIntegration(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(evidence, ["a"+s])
         with engine.connect() as c:
             self.assertFalse(c.execute(text("select nullif(current_setting('app.subject',true),'') is not null")).scalar_one())
+        with engine.begin() as c:
+            self.assertEqual(c.execute(text("update candidates set full_name='wrong'")).rowcount, 0)
         with self.assertRaises(SQLAlchemyError):
             with engine.begin() as c:
-                c.execute(text("update candidates set full_name='wrong'"))
+                c.execute(text("update candidates set id='wrong'"))
 
     async def test_scoped_endpoint_rejects_superuser_connection(self):
         scoped_engine.cache_clear()
@@ -121,3 +123,30 @@ class ScopedIntegration(unittest.IsolatedAsyncioTestCase):
             finally:
                 scoped_engine().dispose()
                 scoped_engine.cache_clear()
+
+    async def test_recruiter_job_writes_are_scoped_and_audited(self):
+        s = self.suffix
+        app.dependency_overrides[require_identity] = lambda: Identity("ra"+s)
+        prefix = "/api/v2/recruiter/workspaces/"
+        forbidden = await self.client.post(prefix+"b"+s+"/jobs", json={"title": "No"})
+        self.assertEqual(forbidden.status_code, 404)
+        created = await self.client.post(prefix+"a"+s+"/jobs", json={"title": "New job"})
+        self.assertEqual(created.status_code, 201, created.text)
+        job_id = created.json()["id"]
+        response = await self.client.patch(prefix+"a"+s+"/jobs/"+job_id, json={"title": "Updated"})
+        self.assertEqual(response.status_code, 200, response.text)
+        response = await self.client.patch(prefix+"a"+s+"/jobs/"+"b"+s, json={"title": "No"})
+        self.assertEqual(response.status_code, 404)
+        response = await self.client.post(prefix+"a"+s+"/jobs", json={"title": "No", "role": "admin"})
+        self.assertEqual(response.status_code, 422)
+        with self.admin.begin() as c:
+            self.assertEqual(c.execute(text("select status from jobs where id=:id"), {"id": job_id}).scalar_one(), "draft")
+            actions = c.execute(text("select action from audit_logs where entity_id=:id order by action"), {"id": job_id}).scalars().all()
+            self.assertEqual(actions, ["job.create", "job.update"])
+            c.execute(text("delete from workspace_memberships where user_id=:u"), {"u": "ra"+s})
+        response = await self.client.patch(prefix+"a"+s+"/jobs/"+job_id, json={"title": "No"})
+        self.assertEqual(response.status_code, 404)
+        with self.assertRaises(SQLAlchemyError):
+            with scoped_engine().begin() as c:
+                c.execute(text("select set_config('app.subject',:u,true)"), {"u": "ra"+s})
+                c.execute(text("update jobs set status='open' where id=:id"), {"id": job_id})
