@@ -68,9 +68,11 @@ def process_one(engine, client: httpx.Client) -> str:
     error = None
     sha = None
     results = None
+    languages = None
     try:
         snapshot = GitHubCollector(client).collect(job["repository_url"])
         sha = snapshot["commit_sha"]
+        languages = snapshot["languages"]
         claims = job["claims"]
         evaluated = evaluate_claims(snapshot, [claim["claim"] for claim in claims])
         results = [
@@ -87,9 +89,12 @@ def process_one(engine, client: httpx.Client) -> str:
     with engine.begin() as conn:
         assert_worker_role(conn)
         saved = conn.execute(text("""
-            select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),:error)
+            select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),
+                                              cast(:languages as jsonb),:error)
         """), {"id": job["job_id"], "token": job["lease_token"], "sha": sha,
-               "findings": json.dumps(results) if results is not None else None, "error": error}).scalar_one()
+               "findings": json.dumps(results) if results is not None else None,
+               "languages": json.dumps(languages) if languages is not None else None,
+               "error": error}).scalar_one()
     return "processed" if saved else "lease_expired"
 
 

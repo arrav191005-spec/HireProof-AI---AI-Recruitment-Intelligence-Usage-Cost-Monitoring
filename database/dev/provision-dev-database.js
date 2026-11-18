@@ -277,14 +277,14 @@ async function inspect(adminUrl, urls) {
     await record('API role cannot claim or finalize verification', async () => {
       const row = (await run(admin, `
         select has_function_privilege('hireproof_dev_api', 'hp_claim_verification_job()', 'EXECUTE') as claim,
-               has_function_privilege('hireproof_dev_api', 'hp_finish_verification_job(text,text,text,jsonb,text)', 'EXECUTE') as finish
+               has_function_privilege('hireproof_dev_api', 'hp_finish_verification_job(text,text,text,jsonb,jsonb,text)', 'EXECUTE') as finish
       `)).rows[0];
       return row.claim === false && row.finish === false;
     });
     await record('worker role can claim and finalize verification', async () => {
       const row = (await run(admin, `
         select has_function_privilege('hireproof_dev_worker', 'hp_claim_verification_job()', 'EXECUTE') as claim,
-               has_function_privilege('hireproof_dev_worker', 'hp_finish_verification_job(text,text,text,jsonb,text)', 'EXECUTE') as finish
+               has_function_privilege('hireproof_dev_worker', 'hp_finish_verification_job(text,text,text,jsonb,jsonb,text)', 'EXECUTE') as finish
       `)).rows[0];
       return row.claim === true && row.finish === true;
     });

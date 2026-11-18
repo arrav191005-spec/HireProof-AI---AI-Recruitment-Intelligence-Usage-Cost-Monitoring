@@ -14,8 +14,8 @@ import { Field, Input, Textarea } from '@/components/ui/Field';
 import Badge from '@/components/ui/Badge';
 import { getSupabaseBrowserClient, supabaseBrowserConfigured } from '@/lib/supabase/client';
 import {
-  ShieldCheck, Github, Play, RefreshCw, FolderPlus, AlertTriangle,
-  CheckCircle2, Clock, ExternalLink, Lock,
+  ShieldCheck, Github, Play, RefreshCw, FolderPlus, Clock, ExternalLink, Lock,
+  LogOut, Languages, ListChecks, MinusCircle, FileText,
 } from 'lucide-react';
 
 const API_BASE = (process.env.NEXT_PUBLIC_VERIFICATION_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
@@ -87,6 +87,72 @@ function EvidenceStatusBadge({ status }) {
 
 function shorten(value, size = 12) {
   return value ? `${value.slice(0, size)}…` : '—';
+}
+
+function formatBytes(value) {
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  if (value < 1000) return `${value} B`;
+  if (value < 1_000_000) return `${(value / 1000).toFixed(1)} KB`;
+  return `${(value / 1_000_000).toFixed(1)} MB`;
+}
+
+const PROGRESS_STEPS = ['Queued', 'Inspecting files', 'Report ready'];
+
+function ProgressSteps({ status }) {
+  const reached = status === 'pending' ? 0 : ['running', 'unavailable', 'failed'].includes(status) ? 1 : status === 'completed' ? 2 : -1;
+  return (
+    <ol className="grid grid-cols-3 gap-2" aria-label="Verification progress">
+      {PROGRESS_STEPS.map((label, index) => (
+        <li key={label}>
+          <div className={`h-1 rounded-full ${index <= reached ? 'bg-brand-500' : 'bg-slate-200'}`} />
+          <p className={`mt-1.5 text-[11px] ${index <= reached ? 'font-medium text-slate-600' : 'text-slate-400'}`}>{label}</p>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function EvidenceGroup({ title, description, items, tone = 'slate', icon: Icon }) {
+  if (items.length === 0) return null;
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {Icon && <Icon size={14} className="text-slate-400" aria-hidden />}
+        <h3 className="text-[13px] font-semibold text-slate-800">{title}</h3>
+        <Badge tone={tone}>{items.length}</Badge>
+      </div>
+      <p className="text-[11px] leading-4 text-slate-400">{description}</p>
+      <ul className="space-y-3">
+        {items.map((item) => (
+          <li key={item.id} className="rounded-xl border border-slate-200 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[14px] font-semibold text-slate-900">{item.claim}</p>
+              <EvidenceStatusBadge status={item.status} />
+            </div>
+            <p className="mt-2 text-[13px] leading-5 text-slate-600">{item.explanation}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+              {item.file_path && (
+                <span className="inline-flex items-center gap-1 font-mono">
+                  <FileText size={10} aria-hidden /> {item.file_path}
+                </span>
+              )}
+              {item.commit_sha && <span className="font-mono">{shorten(item.commit_sha)}</span>}
+              {item.source_url && /^https:\/\/github\.com\//.test(item.source_url) && (
+                <a
+                  href={item.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-brand-700 hover:underline"
+                >
+                  View commit-pinned source <ExternalLink size={10} aria-hidden />
+                </a>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 function SetupNotice() {
@@ -181,7 +247,14 @@ export default function StudentVerification() {
       if (active) setAuth({ state: data.session ? 'ready' : 'signed-out', session: data.session });
     });
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (active) setAuth({ state: session ? 'ready' : 'signed-out', session });
+      if (!active) return;
+      setAuth({ state: session ? 'ready' : 'signed-out', session });
+      if (!session) {
+        setCandidate(null);
+        setProjects([]);
+        setSelectedProjectId(null);
+        setReport(null);
+      }
     });
     return () => {
       active = false;
@@ -280,6 +353,22 @@ export default function StudentVerification() {
     [projects, selectedProjectId]
   );
 
+  // Language byte counts come from GitHub's /languages endpoint at the pinned
+  // commit. They describe repository composition, not authorship.
+  const languageEntries = useMemo(() => Object.entries(report?.repository_languages || {})
+    .filter(([, bytes]) => Number.isFinite(bytes) && bytes > 0)
+    .sort((a, b) => b[1] - a[1]), [report]);
+  const languageTotal = languageEntries.reduce((sum, [, bytes]) => sum + bytes, 0);
+
+  const claimGroups = useMemo(() => {
+    const evidence = report?.evidence || [];
+    return {
+      supporting: evidence.filter((item) => ['supporting', 'partial'].includes(item.status)),
+      review: evidence.filter((item) => ['conflicting', 'needs_review', 'unavailable'].includes(item.status)),
+      notEstablished: evidence.filter((item) => item.status === 'not_established'),
+    };
+  }, [report]);
+
   async function onCreateProfile(event) {
     event.preventDefault();
     setBusy('profile');
@@ -347,6 +436,48 @@ export default function StudentVerification() {
     setClaims((current) => (
       current.includes(claim) ? current.filter((item) => item !== claim) : [...current, claim]
     ));
+  }
+
+  async function onReverify() {
+    if (!selectedProjectId || !report) return;
+    const previousClaims = report.evidence
+      .map((item) => item.claim)
+      .filter((claim) => TECHNOLOGIES.includes(claim));
+    const requestedClaims = previousClaims.length > 0 ? previousClaims : claims;
+    if (requestedClaims.length === 0) {
+      setError('Select at least one technology claim before requesting reverification.');
+      return;
+    }
+    setBusy('reverify');
+    setError(null);
+    setNotice(null);
+    try {
+      await request(`/api/v2/candidates/me/projects/${selectedProjectId}/reverify`, {
+        method: 'POST',
+        body: JSON.stringify({ repository_url: report.repository_url, claims: requestedClaims }),
+      });
+      setNotice('Reverification queued. The report refreshes while the worker runs.');
+      setReportVersion((value) => value + 1);
+    } catch (reverifyError) {
+      setError(friendlyError(reverifyError));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function onSignOut() {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+    setBusy('logout');
+    setError(null);
+    try {
+      const { error: signOutError } = await supabase.auth.signOut();
+      if (signOutError) throw signOutError;
+    } catch {
+      setError('Could not end the Supabase session. Try again.');
+    } finally {
+      setBusy('');
+    }
   }
 
   if (!configured) {
@@ -436,6 +567,37 @@ export default function StudentVerification() {
       ) : (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <div className="space-y-5">
+            <Card>
+              <CardHeader
+                title="Student profile"
+                subtitle="Resolved from your verified Supabase session."
+                actions={<Badge tone="green" dot>Session active</Badge>}
+              />
+              <CardBody className="space-y-3">
+                <div className="grid gap-3 text-[12px] text-slate-600 sm:grid-cols-2">
+                  <div>
+                    <p className="font-semibold uppercase tracking-wide text-slate-400">Name</p>
+                    <p className="mt-1 text-[13px] font-medium text-slate-800">{candidate?.full_name || '—'}</p>
+                  </div>
+                  <div>
+                    <p className="font-semibold uppercase tracking-wide text-slate-400">Candidate ID</p>
+                    <p className="mt-1 break-all font-mono text-[11px] text-slate-700">{candidate?.id || '—'}</p>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <p className="font-semibold uppercase tracking-wide text-slate-400">Supabase email</p>
+                    <p className="mt-1 break-all text-[13px] text-slate-700">{auth.session?.user?.email || 'not returned by provider'}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                  <Badge tone="navy"><ShieldCheck size={11} aria-hidden /> Provider-verified identity</Badge>
+                  <Button type="button" variant="ghost" size="sm" onClick={onSignOut} disabled={busy === 'logout'}>
+                    {busy === 'logout' ? <Spinner size={13} /> : <LogOut size={13} aria-hidden />}
+                    {busy === 'logout' ? 'Signing out…' : 'Sign out'}
+                  </Button>
+                </div>
+              </CardBody>
+            </Card>
+
             <Card>
               <CardHeader
                 title="Projects"
@@ -566,7 +728,9 @@ export default function StudentVerification() {
           <Card>
             <CardHeader
               title="Verification report"
-              subtitle="Commit-pinned observations from a bounded, non-executing GitHub inspection."
+              subtitle={selectedProject
+                ? `Evidence record for ${selectedProject.name || `project #${selectedProject.id}`}.`
+                : 'Commit-pinned observations from a bounded, non-executing GitHub inspection.'}
               actions={report ? <StatusBadge status={report.status} /> : null}
             />
             <CardBody>
@@ -580,8 +744,20 @@ export default function StudentVerification() {
                 />
               ) : (
                 <div className="space-y-4">
+                  <ProgressSteps status={report.status} />
+
                   <div className="grid gap-3 rounded-xl bg-slate-50 p-4 text-[12px] text-slate-600 sm:grid-cols-2">
                     <div>
+                      <p className="font-semibold uppercase tracking-wide text-slate-400">Project</p>
+                      <p className="mt-1 text-[13px] font-medium text-slate-800">
+                        {report.project_name || selectedProject.name || `Project ${report.project_id}`}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="font-semibold uppercase tracking-wide text-slate-400">Verification status</p>
+                      <p className="mt-1"><StatusBadge status={report.status} /></p>
+                    </div>
+                    <div className="sm:col-span-2">
                       <p className="font-semibold uppercase tracking-wide text-slate-400">Repository</p>
                       <a
                         href={report.repository_url}
@@ -593,17 +769,67 @@ export default function StudentVerification() {
                       </a>
                     </div>
                     <div>
-                      <p className="font-semibold uppercase tracking-wide text-slate-400">Commit</p>
-                      <p className="mt-1 font-mono text-[12px] text-slate-700">{report.commit_sha || 'not pinned yet'}</p>
+                      <p className="font-semibold uppercase tracking-wide text-slate-400">Inspected commit</p>
+                      {report.commit_sha ? (
+                        <a
+                          href={`${report.repository_url}/commit/${report.commit_sha}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-1 inline-flex items-center gap-1 break-all font-mono text-[11px] text-brand-700 hover:underline"
+                        >
+                          {report.commit_sha} <ExternalLink size={10} aria-hidden />
+                        </a>
+                      ) : (
+                        <p className="mt-1 font-mono text-[11px] text-slate-500">not pinned yet</p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="font-semibold uppercase tracking-wide text-slate-400">Verification date</p>
+                      <p className="mt-1">{report.finished_at ? new Date(report.finished_at).toLocaleString() : '—'}</p>
                     </div>
                     <div>
                       <p className="font-semibold uppercase tracking-wide text-slate-400">Requested</p>
                       <p className="mt-1">{new Date(report.requested_at).toLocaleString()}</p>
                     </div>
                     <div>
-                      <p className="font-semibold uppercase tracking-wide text-slate-400">Finished</p>
-                      <p className="mt-1">{report.finished_at ? new Date(report.finished_at).toLocaleString() : '—'}</p>
+                      <p className="font-semibold uppercase tracking-wide text-slate-400">Run ID</p>
+                      <p className="mt-1 break-all font-mono text-[11px]">{report.id}</p>
                     </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-slate-800">
+                        <Languages size={14} className="text-slate-400" aria-hidden /> Detected repository languages
+                      </p>
+                      <span className="text-[11px] text-slate-400">GitHub-reported bytes at the inspected commit</span>
+                    </div>
+                    {languageEntries.length === 0 ? (
+                      <p className="mt-2 text-[12px] text-slate-500">No language metadata was returned for this run.</p>
+                    ) : (
+                      <div className="mt-3 space-y-2">
+                        {languageEntries.slice(0, 8).map(([language, bytes]) => {
+                          const share = Math.max(1, Math.round((bytes / languageTotal) * 100));
+                          return (
+                            <div key={language}>
+                              <div className="flex items-center justify-between gap-2 text-[12px]">
+                                <span className="font-medium text-slate-700">{language}</span>
+                                <span className="text-slate-400">{formatBytes(bytes)} · {share}%</span>
+                              </div>
+                              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                                <div className="h-full rounded-full bg-brand-400" style={{ width: `${share}%` }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {languageEntries.length > 8 && (
+                          <p className="text-[11px] text-slate-400">+{languageEntries.length - 8} more detected languages.</p>
+                        )}
+                      </div>
+                    )}
+                    <p className="mt-3 text-[11px] leading-4 text-slate-400">
+                      Language byte counts describe repository composition. They do not show who wrote the code or whether the project runs.
+                    </p>
                   </div>
 
                   {ACTIVE.has(report.status) && (
@@ -621,6 +847,23 @@ export default function StudentVerification() {
                     </InlineAlert>
                   )}
 
+                  {report.evidence.length > 0 && (
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-lg bg-teal-50 p-2 ring-1 ring-inset ring-teal-100">
+                        <p className="text-lg font-semibold text-teal-700">{claimGroups.supporting.length}</p>
+                        <p className="text-[11px] text-teal-700">Supporting</p>
+                      </div>
+                      <div className="rounded-lg bg-amber-50 p-2 ring-1 ring-inset ring-amber-100">
+                        <p className="text-lg font-semibold text-amber-700">{claimGroups.review.length}</p>
+                        <p className="text-[11px] text-amber-700">Requires review</p>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-2 ring-1 ring-inset ring-slate-200">
+                        <p className="text-lg font-semibold text-slate-600">{claimGroups.notEstablished.length}</p>
+                        <p className="text-[11px] text-slate-600">Not established</p>
+                      </div>
+                    </div>
+                  )}
+
                   {report.evidence.length === 0 ? (
                     <EmptyState
                       icon={ShieldCheck}
@@ -628,36 +871,50 @@ export default function StudentVerification() {
                       description={report.status === 'completed' ? 'The run completed without stored findings.' : 'Findings appear after the worker completes.'}
                     />
                   ) : (
-                    <ul className="space-y-3">
-                      {report.evidence.map((item) => (
-                        <li key={item.id} className="rounded-xl border border-slate-200 p-4">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-[14px] font-semibold text-slate-900">{item.claim}</p>
-                            <EvidenceStatusBadge status={item.status} />
-                          </div>
-                          <p className="mt-2 text-[13px] leading-5 text-slate-600">{item.explanation}</p>
-                          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-                            {item.file_path && <span className="font-mono">{item.file_path}</span>}
-                            {item.commit_sha && <span className="font-mono">{shorten(item.commit_sha)}</span>}
-                            {item.source_url && /^https:\/\/github\.com\//.test(item.source_url) && (
-                              <a
-                                href={item.source_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 text-brand-700 hover:underline"
-                              >
-                                View commit-pinned source <ExternalLink size={10} aria-hidden />
-                              </a>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
+                    <div className="space-y-5">
+                      <EvidenceGroup
+                        title="Technology claims with supporting evidence"
+                        description="A matching signal was found in a bounded, commit-pinned file inspection. This is not proof of authorship, functionality, or deployment."
+                        items={claimGroups.supporting}
+                        tone="green"
+                        icon={ListChecks}
+                      />
+                      <EvidenceGroup
+                        title="Claims requiring additional review"
+                        description="Signals conflicted, were unavailable, or need human review before they should be treated as verified."
+                        items={claimGroups.review}
+                        tone="amber"
+                        icon={Clock}
+                      />
+                      <EvidenceGroup
+                        title="Claims not established by the inspected files"
+                        description="No matching signal appeared in the bounded file set. This does not prove the technology is absent from the whole repository."
+                        items={claimGroups.notEstablished}
+                        tone="slate"
+                        icon={MinusCircle}
+                      />
+                    </div>
                   )}
 
+                  <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={onReverify}
+                      disabled={busy === 'reverify' || ACTIVE.has(report.status)}
+                    >
+                      {busy === 'reverify' ? <Spinner size={13} /> : <RefreshCw size={13} aria-hidden />}
+                      {busy === 'reverify' ? 'Queueing…' : 'Reverify repository'}
+                    </Button>
+                    <p className="text-[11px] text-slate-400">Queues a fresh run against the current default-branch commit.</p>
+                  </div>
+
                   <p className="border-t border-slate-100 pt-3 text-[11px] leading-5 text-slate-400">
-                    A finding is a deterministic observation about repository content, not proof of authorship or
-                    functionality. The verifier never clones or executes candidate code.
+                    <strong className="font-semibold text-slate-500">Evidence disclaimer:</strong> these are static
+                    repository observations, not proof that the candidate authored the code, that the project functions,
+                    or that it is deployed. The verifier never clones or executes candidate code, and it does not send
+                    repository content to an AI model.
                   </p>
                 </div>
               )}

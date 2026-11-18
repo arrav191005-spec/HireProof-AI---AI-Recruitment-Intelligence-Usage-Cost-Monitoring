@@ -7,6 +7,7 @@ import base64
 import logging
 import re
 import time
+from collections import deque
 from dataclasses import dataclass
 from urllib.parse import quote, urlsplit
 
@@ -22,6 +23,10 @@ MAX_BODY = 512_000
 MAX_FILE = 64_000
 MAX_SECONDS = 20
 API_VERSION = "2022-11-28"
+MAX_LANGUAGES = 30
+MANIFESTS = {"package.json", "requirements.txt", "pyproject.toml", "pom.xml",
+             "build.gradle", "build.gradle.kts"}
+SOURCE_EXTENSIONS = (".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".sql")
 _OWNER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 _REPO = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -43,6 +48,82 @@ class VerificationUnavailable(Exception):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+def bounded_languages(value) -> dict[str, int]:
+    """Sanitize GitHub language byte counts before persistence.
+
+    The database also validates this shape. Duplicate or malformed entries are
+    dropped rather than failing an otherwise valid verification.
+    """
+    if not isinstance(value, dict):
+        return {}
+    items = []
+    for name, amount in value.items():
+        if not isinstance(name, str) or not 1 <= len(name) <= 60:
+            continue
+        if any(ord(char) < 32 for char in name):
+            continue
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+            continue
+        if amount < 0 or amount != amount or amount == float("inf"):
+            continue
+        items.append((name, int(amount)))
+    items.sort(key=lambda item: (-item[1], item[0]))
+    return dict(items[:MAX_LANGUAGES])
+
+
+def _rank(path: str) -> tuple[int, int, str]:
+    return (path.count("/"), len(path), path)
+
+
+def select_candidate_paths(tree: list, budget: int) -> list[str]:
+    """Choose a deterministic, size-safe mix of manifests and source files.
+
+    Manifests can declare a technology that is never used, so half the file
+    budget is reserved for source files spread across distinct extensions.
+    README prose is selected last and is never treated as technology evidence.
+    """
+    manifests, readmes, sources = [], [], {}
+    for item in tree[:10000]:
+        if not isinstance(item, dict) or item.get("type") != "blob":
+            continue
+        path = item.get("path", "")
+        size = item.get("size")
+        if not isinstance(path, str) or len(path) > 240 or not isinstance(size, int) or size > MAX_FILE:
+            continue
+        if any(part in {"", ".", ".."} for part in path.split("/")):
+            continue
+        name = path.rsplit("/", 1)[-1].lower()
+        extension = "." + name.rsplit(".", 1)[-1] if "." in name else ""
+        if name in MANIFESTS:
+            manifests.append(path)
+        elif name.startswith("readme"):
+            readmes.append(path)
+        elif extension in SOURCE_EXTENSIONS:
+            sources.setdefault(extension, []).append(path)
+
+    # Round-robin across extensions so one large directory cannot consume the
+    # whole budget before another technology is inspected.
+    queues = [deque(sorted(sources[extension], key=_rank))
+              for extension in SOURCE_EXTENSIONS if extension in sources]
+    source_order = []
+    while queues:
+        remaining = []
+        for queue in queues:
+            source_order.append(queue.popleft())
+            if queue:
+                remaining.append(queue)
+        queues = remaining
+
+    reserve = min(len(source_order), max(1, budget // 2))
+    selected = source_order[:reserve]
+    for path in sorted(manifests, key=_rank) + source_order[reserve:] + sorted(readmes, key=_rank):
+        if len(selected) >= budget:
+            break
+        if path not in selected:
+            selected.append(path)
+    return selected[:budget]
 
 
 def normalize_repository_url(value: str) -> tuple[str, str, str]:
@@ -117,28 +198,12 @@ class GitHubCollector:
         sha = commit.get("sha", "") if isinstance(commit, dict) else ""
         if not isinstance(sha, str) or not _SHA.fullmatch(sha):
             raise VerificationUnavailable("invalid_metadata")
-        languages = self.get(root + "/languages")
+        languages = bounded_languages(self.get(root + "/languages"))
         tree = self.get(root + f"/git/trees/{sha}?recursive=1")
         if not isinstance(tree, dict) or not isinstance(tree.get("tree"), list):
             raise VerificationUnavailable("invalid_metadata")
-        candidates = []
-        for item in tree["tree"][:10000]:
-            if not isinstance(item, dict) or item.get("type") != "blob":
-                continue
-            path = item.get("path", "")
-            size = item.get("size")
-            if not isinstance(path, str) or len(path) > 240 or not isinstance(size, int) or size > MAX_FILE:
-                continue
-            if any(p in {"", ".", ".."} for p in path.split("/")):
-                continue
-            lower = path.lower()
-            if lower.endswith(("readme.md", "package.json", "requirements.txt", "pyproject.toml",
-                               "pom.xml", "build.gradle", "build.gradle.kts", ".py", ".js", ".jsx",
-                               ".ts", ".tsx", ".java", ".sql")):
-                candidates.append(path)
-        candidates.sort(key=lambda p: (not p.lower().endswith(("readme.md", "package.json", "requirements.txt", "pyproject.toml", "pom.xml", "build.gradle", "build.gradle.kts")), p))
         files = []
-        for path in candidates[:MAX_REQUESTS - self.requests]:
+        for path in select_candidate_paths(tree["tree"], MAX_REQUESTS - self.requests):
             data = self.get(root + "/contents/" + quote(path, safe="/") + "?ref=" + sha, optional=True)
             if not isinstance(data, dict) or data.get("encoding") != "base64":
                 continue
@@ -150,7 +215,7 @@ class GitHubCollector:
                 continue
             files.append({"path": path, "text": content.decode("utf-8", errors="replace"),
                           "url": f"{canonical}/blob/{sha}/{quote(path, safe='/')}"})
-        return {"repository_url": canonical, "commit_sha": sha, "languages": languages if isinstance(languages, dict) else {},
+        return {"repository_url": canonical, "commit_sha": sha, "languages": languages,
                 "files": files, "tree_truncated": bool(tree.get("truncated"))}
 
 

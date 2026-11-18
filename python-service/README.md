@@ -205,7 +205,7 @@ isolated deployment review succeed.
 
 `database/migrations/003_project_verification.sql`,
 `011_verification_queue.sql`, `012_verification_limits.sql` and
-`013_project_creation.sql` are forward-only; do not run them against a shared
+`013_project_creation.sql` and `014_verification_report_metadata.sql` are forward-only; do not run them against a shared
 or production database without approval. Scoped verification tests require a
 disposable PostgreSQL database whose name starts with `hireproof_rls_`, plus
 `RLS_TEST_ADMIN_URL`, `RLS_TEST_APP_URL` (restricted runtime login),
@@ -229,6 +229,11 @@ endpoint, does not establish recruiter/student privileges, and does not check
 session revocation before token expiry. Legacy symmetric HS256 Supabase keys
 are not supported by this foundation; use a configured asymmetric signing key.
 Registration, login and logout remain in the legacy Supabase frontend.
+
+For the complete isolated development Supabase configuration, live-auth
+boundary test, worker environment separation, migration 014, and the
+evidence-scope limitations, see
+[`../docs/phase-11-development.md`](../docs/phase-11-development.md).
 
 Migration `004_workspace_ownership.sql` defines explicit candidate ownership,
 workspace membership and job-workspace links, initially with no assignments,

@@ -138,6 +138,7 @@ class ProjectVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["status"], "completed")
         self.assertEqual(report["project_name"], "Owned project")
         self.assertEqual(report["commit_sha"], SHA)
+        self.assertEqual(report["repository_languages"], {"Python": 120, "TypeScript": 80})
         evidence = {item["claim"]: item for item in report["evidence"]}
         self.assertEqual(evidence["React"]["status"], "supporting")
         self.assertEqual(evidence["FastAPI"]["status"], "supporting")
@@ -257,24 +258,25 @@ class ProjectVerificationTests(unittest.IsolatedAsyncioTestCase):
                         "explanation": "A bounded file inspection found FastAPI.",
                         "source_url": "https://github.com/example/project/blob/" + SHA + "/app/main.py",
                         "file_path": "app/main.py"}]
-            params = {"id": job["job_id"], "sha": SHA, "findings": json.dumps(finding)}
-            self.assertFalse(c.execute(text("select hp_finish_verification_job(:id,'forged',:sha,cast(:findings as jsonb),null)"),
+            params = {"id": job["job_id"], "sha": SHA, "findings": json.dumps(finding),
+                      "languages": json.dumps({"Python": 120, "TypeScript": 80})}
+            self.assertFalse(c.execute(text("select hp_finish_verification_job(:id,'forged',:sha,cast(:findings as jsonb),cast(:languages as jsonb),null)"),
                                        params).scalar_one())
         with self.assertRaises(SQLAlchemyError):
             with self.worker.begin() as c:
-                c.execute(text("select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),null)"),
+                c.execute(text("select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),cast(:languages as jsonb),null)"),
                           {**params, "token": job["lease_token"], "findings": json.dumps([
                               {**finding[0], "source_url": "https://evil.invalid/app/main.py"}])}).scalar_one()
         with self.assertRaises(SQLAlchemyError):
             with self.worker.begin() as c:
-                c.execute(text("select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),null)"),
+                c.execute(text("select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),cast(:languages as jsonb),null)"),
                           {**params, "token": job["lease_token"], "findings": json.dumps([
                               {**finding[0], "file_path": "../secret.py",
                                "source_url": "https://github.com/example/project/blob/" + SHA + "/../secret.py"}])}).scalar_one()
         with self.worker.begin() as c:
-            self.assertTrue(c.execute(text("select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),null)"),
+            self.assertTrue(c.execute(text("select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),cast(:languages as jsonb),null)"),
                                       {**params, "token": job["lease_token"]}).scalar_one())
-            self.assertFalse(c.execute(text("select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),null)"),
+            self.assertFalse(c.execute(text("select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),cast(:languages as jsonb),null)"),
                                        {**params, "token": job["lease_token"]}).scalar_one())
         self.assertEqual(self.run_status(run_id)["status"], "completed")
 

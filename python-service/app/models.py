@@ -6,7 +6,7 @@ verification runs do not yet exist. Never use metadata.create_all against the
 application database: database/migrations owns the complete schema.
 """
 from datetime import datetime
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, JSON, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -85,6 +85,7 @@ class ProjectVerificationRun(Base):
     repository_ref_id: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text)
     commit_sha: Mapped[str | None] = mapped_column(Text)
+    repository_languages: Mapped[dict] = mapped_column(JSON)
     error_code: Mapped[str | None] = mapped_column(Text)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

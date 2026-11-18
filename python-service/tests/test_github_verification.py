@@ -6,8 +6,8 @@ from unittest.mock import patch
 import httpx
 
 from app.github_verification import (GitHubCollector, VerificationUnavailable,
-                                     evaluate_claims, github_headers,
-                                     normalize_repository_url)
+                                     bounded_languages, evaluate_claims, github_headers,
+                                     normalize_repository_url, select_candidate_paths)
 from app.verification_worker import WorkerConfigurationError, github_token
 
 SHA = "a" * 40
@@ -67,6 +67,42 @@ class GithubTests(unittest.TestCase):
         self.assertEqual([f.status for f in results], ["supporting", "supporting", "supporting", "not_established", "needs_review"])
         self.assertTrue(all(f.source_url and SHA in f.source_url for f in results[:3]))
         self.assertIsNone(results[3].source_url)
+        self.assertEqual(snapshot["languages"], {"Python": 123})
+
+    def test_language_metadata_is_bounded_and_sanitized(self):
+        clean = bounded_languages({
+            "Python": 120, "TypeScript": 80, "Empty": 0, "Float": 7.9,
+            "Negative": -1, "Boolean": True, "Text": "12", "Null": None,
+            "Control\nName": 4, "bad": float("nan"), "infinity": float("inf"),
+            "x" * 61: 2,
+        })
+        self.assertEqual(clean, {"Float": 7, "TypeScript": 80, "Python": 120, "Empty": 0})
+        self.assertEqual(bounded_languages(None), {})
+        self.assertEqual(bounded_languages(["Python"]), {})
+        many = bounded_languages({f"Language{i:02d}": i + 1 for i in range(40)})
+        self.assertEqual(len(many), 30)
+        self.assertEqual(min(many.values()), 11)
+
+    def test_file_selection_reserves_diverse_source_files(self):
+        tree = [
+            {"type": "blob", "path": "README.md", "size": 10},
+            {"type": "blob", "path": "package.json", "size": 10},
+            {"type": "blob", "path": "requirements.txt", "size": 10},
+            {"type": "blob", "path": "pyproject.toml", "size": 10},
+            {"type": "blob", "path": "backend/pyproject.toml", "size": 10},
+            {"type": "blob", "path": "frontend/package.json", "size": 10},
+            {"type": "blob", "path": "app/main.py", "size": 10},
+            {"type": "blob", "path": "app/worker.py", "size": 10},
+            {"type": "blob", "path": "db/schema.sql", "size": 10},
+            {"type": "blob", "path": "web/api.ts", "size": 10},
+            {"type": "blob", "path": "web/App.tsx", "size": 10},
+            {"type": "blob", "path": "web/legacy.js", "size": 10},
+        ]
+        paths = select_candidate_paths(tree, 6)
+        self.assertEqual(len(paths), 6)
+        self.assertEqual(list(dict.fromkeys(p.rsplit(".", 1)[-1] for p in paths[:3])), ["py", "js", "ts"])
+        self.assertFalse(any(p.lower().startswith("readme") for p in paths))
+        self.assertNotIn("app/worker.py", paths)
 
     def test_unavailable_and_rate_limit(self):
         for status, headers, code in [(404, {}, "not_found_or_inaccessible"),

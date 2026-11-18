@@ -59,6 +59,7 @@ class VerificationReport(BaseModel):
     repository_url: str
     status: str
     commit_sha: str | None
+    repository_languages: dict[str, int]
     error_code: str | None
     requested_at: str
     finished_at: str | None
@@ -76,8 +77,8 @@ def _owned_project(conn, project_id):
 
 def _report(conn, project_id, run_id=None):
     row = conn.execute(text("""
-        select r.id,r.project_id,p.name as project_name,ref.repository_url,r.status,r.commit_sha,r.error_code,
-               r.requested_at,r.finished_at
+        select r.id,r.project_id,p.name as project_name,ref.repository_url,r.status,r.commit_sha,
+               r.repository_languages,r.error_code,r.requested_at,r.finished_at
         from project_verification_runs r
         join project_repository_refs ref on ref.id=r.repository_ref_id
         join projects p on p.id=r.project_id
