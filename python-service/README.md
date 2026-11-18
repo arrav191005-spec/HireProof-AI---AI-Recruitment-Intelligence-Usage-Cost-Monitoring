@@ -42,23 +42,74 @@ Environment variables (secrets only ever via env — never hardcoded, never logg
 
 ## Endpoints
 
-### GitHub verification (development only)
+### GitHub verification (feature-gated, internal)
 
 `app/github_verification.py` contains a bounded, deterministic public-repository
 collector and technology-signal matcher. It never executes repository code or
 calls OpenAI. A source signal is not proof of function or authorship; missing
 signals are not proof of fraud. Collection uses only `https://api.github.com`,
 does not follow redirects, and limits requests, response sizes and duration.
-The caller must supply an `httpx.Client`; no GitHub credential is currently
-loaded or used, and private repositories are not supported.
+Private repositories are refused. No GitHub credential is currently loaded or
+used, so the shared unauthenticated GitHub rate limit applies.
 
-Candidate-specific verification routes intentionally return 503 until
-candidate ownership and recruiter workspace authorization exist. No production
-verification workflow, retry worker, or AI interpretation is enabled.
-`database/migrations/003_project_verification.sql` is forward-only; do not run
-it against a shared or production database without approval. To run the
-opt-in persistence test, set `VERIFICATION_TEST_DATABASE_URL` to a disposable
-PostgreSQL database with migrations applied; its test fixtures are rolled back.
+The authenticated workflow is disabled unless `VERIFICATION_ENABLED=true` is
+set for both the API and worker. When enabled, the scoped endpoints are:
+
+| Method | Path |
+| --- | --- |
+| `POST` | `/api/v2/candidates/me/projects/{project_id}/verify` |
+| `POST` | `/api/v2/candidates/me/projects/{project_id}/reverify` |
+| `GET` | `/api/v2/candidates/me/projects/{project_id}/verification` |
+| `GET` | `/api/v2/candidates/me/projects/{project_id}/verification/{run_id}` |
+| `GET` | `/api/v2/candidates/me/projects/{project_id}/verification/{run_id}/evidence/{evidence_id}` |
+| `GET` | `/api/v2/recruiter/workspaces/{workspace_id}/applications/{application_id}/projects/{project_id}/verification/{run_id}` |
+
+Students can enqueue and read only projects they own. Recruiters can read only
+through the workspace/application relationship; cross-workspace access is
+denied. Enqueueing accepts a canonical `https://github.com/owner/repo` URL and
+1–8 technologies from JavaScript, TypeScript, React, Python, FastAPI,
+PostgreSQL, Java and Spring Boot. A completed run records the inspected commit
+SHA and commit-pinned source URLs. Evidence statuses distinguish supporting,
+partial, not established, conflicting, needs review and unavailable; the
+current deterministic matcher emits only `supporting`, `not_established` and
+`needs_review`. Repository existence alone is never treated as authorship proof.
+
+Processing uses a durable PostgreSQL queue (`database/migrations/011`). The API
+role can enqueue for an owned project but cannot write evidence or change run
+status. A separate worker role can claim one leased job and finalize it through
+security-definer functions; it has no direct table writes and cannot enqueue.
+Provision the NOLOGIN group in
+`database/provision-verification-worker-role.sql`, then grant it only to a
+separately managed worker login. Run `python -m app.verification_worker` from an
+external scheduler with `VERIFICATION_ENABLED=true` and
+`VERIFICATION_WORKER_DATABASE_URL` set to that restricted login. Set
+`VERIFICATION_WORKER_DATABASE_URL` only in the worker's secret manager, never
+in the frontend or API runtime. Leases expire after 90 seconds, retryable
+provider failures back off for 30 seconds, and a job is limited to three
+attempts before its run becomes `failed` with `retry_exhausted`. Identical
+concurrent requests return the existing active run; a different active request
+returns 409. Evidence writes and status changes are audited.
+
+Default tests use deterministic mocked GitHub responses. A read-only live
+collector check can be run with `LIVE_GITHUB_TEST=1`; it is excluded from the
+default suite because it needs public network access and GitHub's anonymous
+rate limit. One manual disposable-database run against the public
+`psf/requests` repository completed through the real worker and pushed
+commit-pinned evidence. No live Supabase authentication test has passed, so the
+complete JWT-to-provider path remains mocked. Leave verification disabled until
+an isolated deployment test passes and the pending migrations are approved and
+applied.
+
+`database/migrations/003_project_verification.sql` and
+`011_verification_queue.sql` are forward-only; do not run them against a shared
+or production database without approval. Scoped verification tests require a
+disposable PostgreSQL database whose name starts with `hireproof_rls_`, plus
+`RLS_TEST_ADMIN_URL`, `RLS_TEST_APP_URL` (restricted runtime login) and
+`VERIFICATION_TEST_WORKER_URL` (separate worker login). They create synthetic
+users, projects and applications and drain verification runs between test
+methods; never point them at the application database. The older opt-in
+persistence test uses `VERIFICATION_TEST_DATABASE_URL` and rolls its fixtures
+back.
 
 ### V2 identity foundation
 
@@ -77,9 +128,10 @@ Registration, login and logout remain in the legacy Supabase frontend.
 Migration `004_workspace_ownership.sql` defines explicit candidate ownership,
 workspace membership and job-workspace links, initially with no assignments,
 client grants or permissive RLS policies. It has not been applied to the
-application database. This schema is not yet wired into authorization;
-verification endpoints remain disabled. A non-owner, non-BYPASSRLS database
-role and scoped policies must be provisioned before private APIs are enabled.
+application database. Migration `005_scoped_read_rls.sql` provides the scoped
+read policies, and later migrations add narrowly scoped writes. A non-owner,
+non-BYPASSRLS database role and the policies must be provisioned before private
+APIs are enabled.
 
 ### Scoped PostgreSQL reads (development)
 
@@ -203,9 +255,9 @@ need separate deployment and security review. Demo mode is not authentication.
 #### Migration and recovery safety
 
 The application database currently has migrations 001 and 002. Migrations 003
-through 010 are pending; the migration runner applies all pending files, and
-005 and 010 require their separately provisioned group roles to exist first.
-Do not run the runner or role
+through 011 are pending; the migration runner applies all pending files, and
+005, 010 and 011 require their separately provisioned group roles to exist
+first. Do not run the runner or role
 provisioning against a shared database without explicit approval. Check
 `schema_migrations` checksums against repository files, inspect ownership and
 role settings, and test the complete sequence on an isolated database first.
@@ -237,9 +289,9 @@ unavailable. `/api/v2/health` remains a separate liveness check.
 The existing `database/migrations/*.sql` and migration runner remain the sole
 schema authority. Python models map a subset of existing columns and must not
 be used to generate tables or Alembic autogeneration against this schema.
-There are no dedicated certificate or verification-run tables yet; these need
-a separately reviewed forward migration. No database schema is changed on
-service startup.
+Certificate and verification-run tables are defined by reviewed forward
+migrations (003 and 011); certificate verification remains disabled. No
+database schema is changed on service startup.
 
 Run Python API tests with `cd python-service && .venv/bin/python -m unittest
 discover -s tests -v`. PostgreSQL integration tests are skipped unless

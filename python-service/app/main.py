@@ -18,6 +18,7 @@ from . import __version__, config, questions as questions_mod
 from .api.v2 import router as v2_router
 from .api.verification import router as verification_router
 from .api.scoped import router as scoped_router
+from .api.project_verification import router as project_verification_router
 from .extraction import extract_evidence
 from .llm import embed_texts
 from .pdf import parse_resume
@@ -54,6 +55,7 @@ app = FastAPI(
 app.include_router(v2_router)
 app.include_router(verification_router)
 app.include_router(scoped_router)
+app.include_router(project_verification_router)
 
 
 # --------------------------------------------------------------------------- #

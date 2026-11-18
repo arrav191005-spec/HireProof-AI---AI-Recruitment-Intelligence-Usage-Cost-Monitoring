@@ -66,3 +66,30 @@ class GithubTests(unittest.TestCase):
             collector.requests = 12
             with self.assertRaises(VerificationUnavailable):
                 collector.collect("https://github.com/example/project")
+
+    def test_private_deleted_and_oversized_content_are_not_collected(self):
+        def private(request):
+            return httpx.Response(200, json={"private": True, "default_branch": "main"})
+
+        def oversized(request):
+            if "/contents/" in request.url.path:
+                return httpx.Response(200, json={"encoding": "base64", "content": ""})
+            if "/git/trees/" in request.url.path:
+                return httpx.Response(200, json={"tree": [
+                    {"type": "blob", "path": "huge.ts", "size": 65_000},
+                    {"type": "blob", "path": "small.ts", "size": 30},
+                ], "truncated": False})
+            return fixture_response(request)
+
+        with httpx.Client(transport=httpx.MockTransport(private)) as client:
+            with self.assertRaises(VerificationUnavailable) as caught:
+                GitHubCollector(client).collect("https://github.com/example/project")
+            self.assertEqual(caught.exception.code, "inaccessible")
+        with httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(404))) as client:
+            with self.assertRaises(VerificationUnavailable) as caught:
+                GitHubCollector(client).collect("https://github.com/example/project")
+            self.assertEqual(caught.exception.code, "not_found_or_inaccessible")
+        with httpx.Client(transport=httpx.MockTransport(oversized)) as client:
+            snapshot = GitHubCollector(client).collect("https://github.com/example/project")
+        self.assertEqual([f["path"] for f in snapshot["files"]], ["small.ts"])
+        self.assertTrue(snapshot["files"][0]["url"].endswith("/blob/" + SHA + "/small.ts"))
