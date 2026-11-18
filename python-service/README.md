@@ -102,9 +102,9 @@ Migration 005 grants this group read-only access under RLS; it grants no writes.
 The service checks role properties before scoped reads. Database credentials
 must never reach clients: anyone with the database login can set `app.subject`
 directly. Role and schema configuration must be verified before deployment.
-Recruiter identity and workspace bootstrap are not implemented. Existing
-legacy APIs are not covered by these new policies and must remain isolated or
-be retired separately.
+Recruiter identity and workspace bootstrap use a separate operator-only
+process described below. Existing legacy APIs are not covered by these new
+policies and must remain isolated or be retired separately.
 
 ### Scoped write foundation (not production provisioning)
 
@@ -120,10 +120,46 @@ references and verification results cannot be written by these endpoints.
 Existing workspace members can create **draft** jobs and edit their titles;
 they cannot change membership, workspace links, or job status. A trusted
 operator must establish the first workspace, administrator membership, and
-provider-to-user mappings outside the public API after independent identity
-verification and an approved authorization process. No automated bootstrap,
-recruiter-profile provisioning, or workspace creation API exists yet. Never
-provision an administrator based on user-editable JWT metadata.
+recruiter mappings outside the public API after independent authorization.
+Never provision an administrator based on user-editable JWT metadata.
+
+#### Operator-only recruiter and workspace bootstrap
+
+The public API cannot self-provision recruiter or administrator roles. After
+explicit approval and migration review, a DBA provisions the separate NOLOGIN
+group in `database/provision-bootstrap-role.sql` and grants membership only to
+a dedicated operator login. Migration 010 grants that group narrowly defined
+provisioning privileges and RLS policies. The normal `hireproof_v2_access`
+runtime login must never inherit the bootstrap group. The bootstrap login must
+not be a superuser, BYPASSRLS, CREATEROLE, or member of the V2 runtime group.
+Restrict human access to it and to the Supabase service-role credential.
+
+Set `BOOTSTRAP_DATABASE_URL`, `SUPABASE_AUTH_ISSUER`,
+`SUPABASE_JWT_AUDIENCE`, and `SUPABASE_BOOTSTRAP_SERVICE_KEY` in the operator
+process using an approved secret manager; never place the database URL or
+service-role key in
+frontend settings, source control, shell history or logs. From `python-service`:
+
+```bash
+.venv/bin/python -m app.operator_bootstrap --subject SUPABASE_USER_UUID \
+  --display-name 'Recruiter name' --workspace-id APPROVED_WORKSPACE_ID \
+  --workspace-name 'Approved organization' --confirm
+```
+
+Omit both workspace arguments to provision an additional recruiter for a
+subsequent invitation. The CLI checks the operator DB identity, confirms the
+subject and confirmed email via Supabase's admin API, then creates the mapping,
+profile, and optionally a new workspace and first admin in one transaction.
+It refuses candidate/recruiter identity conflicts and existing workspaces
+unless they match the original recorded bootstrap. It logs successful actions
+with the database operator and target IDs; failed operations roll back and
+require external operator audit logging. An operator role has privileged direct
+table access and could bypass CLI controls, so use separate access controls,
+database audit facilities, and approval procedures. This flow has only been
+tested with mocked Supabase responses, not against a live provider.
+
+Admins can view/update workspace details and list pending invitations. The list
+does not include tokens or hashes. There is no role-change or admin-removal API.
 
 `POST /api/v2/accounts/student` first validates the JWT and then checks the
 same subject and confirmed email against Supabase Auth's `/user` endpoint,
@@ -167,8 +203,9 @@ need separate deployment and security review. Demo mode is not authentication.
 #### Migration and recovery safety
 
 The application database currently has migrations 001 and 002. Migrations 003
-through 009 are pending; the migration runner applies all pending files, and
-005 requires the group role to exist first. Do not run the runner or role
+through 010 are pending; the migration runner applies all pending files, and
+005 and 010 require their separately provisioned group roles to exist first.
+Do not run the runner or role
 provisioning against a shared database without explicit approval. Check
 `schema_migrations` checksums against repository files, inspect ownership and
 role settings, and test the complete sequence on an isolated database first.

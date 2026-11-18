@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from ..auth import Identity, bearer, require_identity
 from fastapi.security import HTTPAuthorizationCredentials
+from datetime import datetime
 from ..provider_identity import confirmed_email
 from ..scoped_db import scoped_read
 
@@ -75,6 +76,23 @@ class AcceptedInvitation(BaseModel):
 
 class StudentIdentity(BaseModel):
     user_id: str
+
+
+class RecruiterProfile(BaseModel):
+    user_id: str
+    display_name: str
+
+
+class WorkspaceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=120)
+
+
+class PendingInvitation(BaseModel):
+    id: str
+    invitee_user_id: str
+    created_at: datetime
+    expires_at: datetime
 
 
 def require_workspace_admin(conn, workspace_id):
@@ -180,6 +198,47 @@ def recruiter_workspaces(identity: Identity = Depends(require_identity)):
         join workspace_memberships m on m.workspace_id = w.id
         where m.user_id = hp_user_id() order by w.id
     """)).mappings()])
+
+
+@router.get("/recruiter/me", response_model=RecruiterProfile)
+def recruiter_profile(identity: Identity = Depends(require_identity)):
+    def query(conn):
+        row = conn.execute(text("select user_id,display_name from recruiter_profiles where user_id=hp_user_id()")).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Recruiter profile not found.")
+        return dict(row)
+    return scoped_read(identity.subject, query)
+
+
+@router.get("/recruiter/workspaces/{workspace_id}", response_model=Workspace)
+def workspace_detail(workspace_id: str, identity: Identity = Depends(require_identity)):
+    def query(conn):
+        row = conn.execute(text("select id,name from workspaces where id=:id and hp_in_workspace(:id)"),
+                           {"id": workspace_id}).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Workspace not found.")
+        return dict(row)
+    return scoped_read(identity.subject, query)
+
+
+@router.patch("/recruiter/workspaces/{workspace_id}", response_model=Workspace)
+def update_workspace(workspace_id: str, body: WorkspaceUpdate, identity: Identity = Depends(require_identity)):
+    def write(conn):
+        require_workspace_admin(conn, workspace_id)
+        if not conn.execute(text("select hp_update_workspace(:id,:name)"),
+                            {"id": workspace_id, "name": body.name}).scalar_one():
+            raise HTTPException(status_code=404, detail="Workspace not found.")
+        return {"id": workspace_id, "name": body.name}
+    return scoped_read(identity.subject, write)
+
+
+@router.get("/recruiter/workspaces/{workspace_id}/invitations", response_model=list[PendingInvitation])
+def pending_invitations(workspace_id: str, identity: Identity = Depends(require_identity)):
+    def query(conn):
+        require_workspace_admin(conn, workspace_id)
+        return [dict(row) for row in conn.execute(text("select * from hp_pending_invitations(:id)"),
+                                                   {"id": workspace_id}).mappings()]
+    return scoped_read(identity.subject, query)
 
 
 @router.get("/recruiter/workspaces/{workspace_id}/jobs", response_model=list[WorkspaceJob])

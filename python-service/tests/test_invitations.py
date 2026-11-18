@@ -94,6 +94,17 @@ class InvitationTests(unittest.IsolatedAsyncioTestCase):
                       {"id": invite["id"]})
         self.as_user("invitee")
         self.assertEqual((await self.client.post("/api/v2/recruiter/invitations/accept", json={"token": invite["token"]})).status_code, 404)
+
+    async def test_pending_list_is_admin_only_and_excludes_tokens(self):
+        invite = await self.invite()
+        response = await self.client.get(f"/api/v2/recruiter/workspaces/w{self.suffix}/invitations")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["id"], invite["id"])
+        self.assertNotIn(invite["token"], response.text)
+        self.assertNotIn("token_hash", response.text)
+        self.as_user("other")
+        self.assertEqual((await self.client.get(
+            f"/api/v2/recruiter/workspaces/w{self.suffix}/invitations")).status_code, 404)
         response = await self.client.post(f"/api/v2/recruiter/workspaces/w{self.suffix}/invitations",
                                           json={"invitee_user_id": "other"+self.suffix})
         self.assertEqual(response.status_code, 404)
