@@ -5,7 +5,7 @@ are migrated incrementally. This endpoint is a liveness check, not a check of
 database, storage, authentication, or external provider readiness.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from .. import config
 from ..db import DatabaseNotConfigured, get_engine
 from ..models import Job
+from ..auth import Identity, require_identity
 
 router = APIRouter(prefix="/api/v2", tags=["v2"])
 
@@ -31,6 +32,12 @@ def health() -> V2HealthResponse:
         service=config.SERVICE_NAME,
         version=config.SERVICE_VERSION,
     )
+
+
+@router.get("/me")
+def current_identity(identity: Identity = Depends(require_identity)):
+    """Verified provider subject only; no role or profile is inferred."""
+    return {"subject": identity.subject}
 
 
 @router.get("/ready")

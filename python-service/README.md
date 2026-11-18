@@ -60,6 +60,27 @@ it against a shared or production database without approval. To run the
 opt-in persistence test, set `VERIFICATION_TEST_DATABASE_URL` to a disposable
 PostgreSQL database with migrations applied; its test fixtures are rolled back.
 
+### V2 identity foundation
+
+`GET /api/v2/me` accepts an `Authorization: Bearer <access-token>` header.
+Configure `SUPABASE_AUTH_ISSUER` to the trusted HTTPS Supabase Auth issuer
+(for example `https://PROJECT-REF.supabase.co/auth/v1`) and
+`SUPABASE_JWT_AUDIENCE` to the intended audience (normally `authenticated`).
+The service validates RS256 or ES256 signatures against the issuer's JWKS,
+plus issuer, audience and expiry. Missing credentials return 401; missing
+configuration or an unreachable key service returns 503. This is not a login
+endpoint, does not establish recruiter/student privileges, and does not check
+session revocation before token expiry. Legacy symmetric HS256 Supabase keys
+are not supported by this foundation; use a configured asymmetric signing key.
+Registration, login and logout remain in the legacy Supabase frontend.
+
+Migration `004_workspace_ownership.sql` defines explicit candidate ownership,
+workspace membership and job-workspace links, initially with no assignments,
+client grants or permissive RLS policies. It has not been applied to the
+application database. This schema is not yet wired into authorization;
+verification endpoints remain disabled. A non-owner, non-BYPASSRLS database
+role and scoped policies must be provisioned before private APIs are enabled.
+
 ### PostgreSQL configuration
 
 The Python service reads `DATABASE_URL` from its **process environment**; it
