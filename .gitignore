@@ -5,6 +5,7 @@ node_modules/
 out/
 .env.local
 .env*.local
+.env.dev.local
 .dev.vars
 storage/
 .data/

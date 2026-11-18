@@ -16,6 +16,9 @@ touched to make this work.
 | `run-migrations.js` | Transaction-per-file runner, sha256 checksums, `--status` |
 | `seed.js` | Idempotent demo seed from `lib/demo-data.js` (exact ids) |
 | `reset.js` | Destructive reset with hardcoded allowlist (needs `--yes`) |
+| `dev/guards.js` | Local-only name/host guards, env parsing, secret redaction |
+| `dev/provision-dev-database.js` | Guarded `hireproof_dev` provisioning, roles, migrations, readiness checks |
+| `dev/backup-restore-check.js` | `pg_dump`/`pg_restore` rehearsal in a disposable `hireproof_dev_restorecheck_*` database |
 | `smoke-test.js` | Parity + mutation test of `lib/repo/postgres.js` (exit ≠ 0 on mismatch) |
 | `load-env.js` | Loads `.env.local` then `.env` for plain-`node` scripts |
 | `tls.js` | Shared TLS config for the Supabase pooler |
@@ -33,6 +36,28 @@ node database/reset.js --yes           # DESTRUCTIVE: drops allowlisted objects,
 
 All scripts load `.env.local` themselves (plain `node` has no dotenv) and work
 with the Supabase pooler (`:6543`, TLS required — see `tls.js`).
+
+## Isolated development database
+
+The V2 verification workflow uses a separate local database and three
+restricted logins. These scripts refuse any database name outside
+`hireproof_dev[_<suffix>]` and any non-loopback host, and never touch the
+existing `hireproof` application database.
+
+```bash
+DEV_ADMIN_URL=postgresql://YOUR_LOCAL_USER@127.0.0.1:5432/postgres \
+  npm run db:dev:provision -- --enable-verification
+npm run db:dev:backup-check
+```
+
+Provisioning is idempotent. It creates the NOLOGIN groups
+`hireproof_v2_access`, `hireproof_verification_worker` and
+`hireproof_bootstrap_operator`, plus the LOGIN roles `hireproof_dev_api`,
+`hireproof_dev_worker` and `hireproof_dev_operator`. It applies every migration
+through the normal runner, verifies role separation/RLS/grants and writes
+`.env.dev.local` (gitignored, mode `0600`). Re-run with
+`DEV_ROTATE_PASSWORDS=1` to rotate development passwords. The backup check
+uses a disposable marker row and temporarily named restore database only.
 
 ## Design decisions
 

@@ -24,6 +24,7 @@ const NAV = [
   { href: '/search', label: 'Candidate Search', icon: Search },
   { href: '/candidates', label: 'Candidates', icon: Users },
   { href: '/assessments', label: 'Skill Assessments', icon: ClipboardCheck },
+  { href: '/verification', label: 'My Verification', icon: ShieldCheck },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];

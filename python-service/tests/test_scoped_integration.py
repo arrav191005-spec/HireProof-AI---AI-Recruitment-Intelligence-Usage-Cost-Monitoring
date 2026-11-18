@@ -90,8 +90,12 @@ class ScopedIntegration(unittest.IsolatedAsyncioTestCase):
         s = self.suffix
         engine = scoped_engine()
         with engine.begin() as c:
-            user = c.execute(text("select current_user, rolsuper, rolbypassrls from pg_roles where rolname=current_user")).one()
-            self.assertEqual(tuple(user), ("hireproof_v2_test_login", False, False))
+            user = c.execute(text("""
+                select rolsuper, rolbypassrls,
+                       pg_has_role(current_user,'hireproof_v2_access','member') as v2_member
+                from pg_roles where rolname=current_user
+            """)).one()
+            self.assertEqual(tuple(user), (False, False, True))
             self.assertEqual(c.execute(text("select count(*) from candidates where id like :s"), {"s": "%"+s}).scalar_one(), 0)
             c.execute(text("select set_config('app.subject',:s,true)"), {"s": "sa"+s})
             ids = c.execute(text("select id from candidates where id like :s"), {"s": "%"+s}).scalars().all()

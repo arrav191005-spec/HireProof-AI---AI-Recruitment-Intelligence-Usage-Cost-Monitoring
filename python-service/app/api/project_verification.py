@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from ..auth import Identity, require_identity
 from ..github_verification import normalize_repository_url
@@ -18,6 +19,16 @@ Technology = Literal["JavaScript", "TypeScript", "React", "Python", "FastAPI",
 def require_enabled():
     if os.environ.get("VERIFICATION_ENABLED") != "true":
         raise HTTPException(status_code=503, detail="Verification is disabled.")
+
+
+def quota_retry_after(exc: DBAPIError) -> str | None:
+    """Map the database quota exception to a sanitized 429 response."""
+    orig = exc.orig
+    sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    if sqlstate != "P0001" or "quota" not in str(orig).lower():
+        return None
+    detail = getattr(getattr(orig, "diag", None), "message_detail", None)
+    return {"active": "60", "hourly": "3600", "daily": "86400"}.get(detail, "3600")
 
 
 class VerificationRequest(BaseModel):
@@ -97,8 +108,18 @@ def request_verification(project_id: int, body: VerificationRequest, identity: I
         raise HTTPException(status_code=422, detail="Invalid GitHub repository URL.") from None
     def enqueue(conn):
         _owned_project(conn, project_id)
-        run_id = conn.execute(text("select hp_enqueue_verification(:pid,:url,:claims)"),
-                              {"pid": project_id, "url": url, "claims": body.claims}).scalar_one()
+        try:
+            run_id = conn.execute(text("select hp_enqueue_verification(:pid,:url,:claims)"),
+                                  {"pid": project_id, "url": url, "claims": body.claims}).scalar_one()
+        except DBAPIError as exc:
+            retry_after = quota_retry_after(exc)
+            if retry_after is None:
+                raise
+            raise HTTPException(
+                status_code=429,
+                detail="Verification request limit reached. Try again later.",
+                headers={"Retry-After": retry_after},
+            ) from None
         if run_id == "conflict":
             raise HTTPException(status_code=409, detail="A different verification is already active.")
         if run_id is None:

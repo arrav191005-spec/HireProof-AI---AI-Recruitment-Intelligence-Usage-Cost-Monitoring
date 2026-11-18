@@ -21,9 +21,22 @@ MAX_REQUESTS = 12
 MAX_BODY = 512_000
 MAX_FILE = 64_000
 MAX_SECONDS = 20
+API_VERSION = "2022-11-28"
 _OWNER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 _REPO = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def github_headers(token: str | None = None) -> dict[str, str]:
+    """Headers for GitHub REST. The token stays server-side and is never logged."""
+    headers = {
+        "User-Agent": "HireProof-AI-Verification",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": API_VERSION,
+    }
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    return headers
 
 
 class VerificationUnavailable(Exception):

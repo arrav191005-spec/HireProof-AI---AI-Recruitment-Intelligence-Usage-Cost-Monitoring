@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.auth import Identity, require_identity
 from app.main import app
 from app.scoped_db import scoped_engine
+from app.verification_monitor import collect as collect_metrics
 from app.verification_worker import process_one, worker_engine
 
 ADMIN = os.environ.get("RLS_TEST_ADMIN_URL")
@@ -316,3 +317,85 @@ class ProjectVerificationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.enqueue()).status_code, 503)
         with patch.dict(os.environ, {"VERIFICATION_ENABLED": ""}):
             self.assertEqual((await self.enqueue()).status_code, 503)
+
+    def create_second_project(self, name="Second owned project"):
+        with self.admin.begin() as c:
+            return c.execute(text(
+                "insert into projects(candidate_id,name,ord) values (:cid,:name,1) returning id"
+            ), {"cid": "cand-stu" + self.suffix, "name": name}).scalar_one()
+
+    def set_policy(self, **values):
+        assignments = ",".join(f"{key}=:{key}" for key in values)
+        with self.admin.begin() as c:
+            c.execute(text(
+                f"update verification_policy set {assignments}, updated_at=now() where singleton"
+            ), values)
+
+    async def test_per_user_active_and_hourly_quotas(self):
+        self.set_policy(max_active_per_user=1, max_requests_per_hour=2, max_requests_per_day=30)
+        defaults = {"max_active_per_user": 2, "max_requests_per_hour": 10,
+                    "max_requests_per_day": 30, "max_running_jobs": 4}
+        try:
+            first = await self.enqueue(claims=("Python",))
+            self.assertEqual(first.status_code, 202, first.text)
+            duplicate = await self.enqueue(claims=("Python",))
+            self.assertEqual(duplicate.status_code, 202, duplicate.text)
+            self.assertEqual(duplicate.json()["run_id"], first.json()["run_id"])
+
+            metrics = collect_metrics(self.worker)
+            self.assertEqual(metrics["queue_depth"], 1)
+            self.assertEqual(metrics["pending_runs"], 1)
+            self.assertEqual(metrics["policy"]["max_active_per_user"], 1)
+
+            second_project = self.create_second_project()
+            self.as_user("stu")
+            blocked = await self.client.post(
+                f"/api/v2/candidates/me/projects/{second_project}/verify",
+                json={"repository_url": "https://github.com/example/second", "claims": ["React"]})
+            self.assertEqual(blocked.status_code, 429, blocked.text)
+            self.assertEqual(blocked.headers.get("retry-after"), "60")
+            self.assertNotIn("verification quota exceeded", blocked.text)
+            self.assertNotIn("cand-", blocked.text)
+
+            self.assertEqual(self.run_worker(), "processed")
+            second = await self.enqueue(claims=("FastAPI",))
+            self.assertEqual(second.status_code, 202, second.text)
+            self.assertEqual(self.run_worker(), "processed")
+            hourly = await self.enqueue(claims=("TypeScript",))
+            self.assertEqual(hourly.status_code, 429, hourly.text)
+            self.assertEqual(hourly.headers.get("retry-after"), "3600")
+
+            metrics = collect_metrics(self.worker)
+            self.assertEqual(metrics["completed_last_24h"], 2)
+            self.assertEqual(metrics["queue_depth"], 0)
+            serialized = json.dumps(metrics)
+            for private in ("example/project", "cand-", "example.invalid", "auth_user_id"):
+                self.assertNotIn(private, serialized)
+        finally:
+            self.set_policy(**defaults)
+
+    async def test_global_running_job_limit(self):
+        self.set_policy(max_active_per_user=5, max_running_jobs=1)
+        defaults = {"max_active_per_user": 2, "max_requests_per_hour": 10,
+                    "max_requests_per_day": 30, "max_running_jobs": 4}
+        try:
+            second_project = self.create_second_project()
+            self.as_user("stu")
+            first = await self.enqueue(claims=("Python",))
+            second = await self.client.post(
+                f"/api/v2/candidates/me/projects/{second_project}/verify",
+                json={"repository_url": "https://github.com/example/second", "claims": ["React"]})
+            self.assertEqual(first.status_code, 202, first.text)
+            self.assertEqual(second.status_code, 202, second.text)
+
+            with self.worker.begin() as c:
+                claimed = c.execute(text("select * from hp_claim_verification_job()")).mappings().first()
+            self.assertIsNotNone(claimed)
+            with self.worker.begin() as c:
+                self.assertIsNone(c.execute(text("select * from hp_claim_verification_job()")).mappings().first())
+            with self.admin.connect() as c:
+                self.assertEqual(c.execute(text(
+                    "select count(*) from project_verification_runs where status='running'"
+                )).scalar_one(), 1)
+        finally:
+            self.set_policy(**defaults)

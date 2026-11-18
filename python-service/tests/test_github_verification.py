@@ -1,11 +1,14 @@
 import base64
+import os
 import unittest
 from unittest.mock import patch
 
 import httpx
 
 from app.github_verification import (GitHubCollector, VerificationUnavailable,
-                                     evaluate_claims, normalize_repository_url)
+                                     evaluate_claims, github_headers,
+                                     normalize_repository_url)
+from app.verification_worker import WorkerConfigurationError, github_token
 
 SHA = "a" * 40
 
@@ -40,6 +43,22 @@ class GithubTests(unittest.TestCase):
                       "https://user@github.com/a/b", "https://github.com/a/b?x=1"]:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 normalize_repository_url(value)
+
+    def test_optional_server_side_token_headers(self):
+        anonymous = github_headers()
+        self.assertNotIn("Authorization", anonymous)
+        self.assertEqual(anonymous["Accept"], "application/vnd.github+json")
+        self.assertEqual(anonymous["X-GitHub-Api-Version"], "2022-11-28")
+        authenticated = github_headers("ghp_example_token")
+        self.assertEqual(authenticated["Authorization"], "Bearer ghp_example_token")
+        with patch.dict(os.environ, {"GITHUB_TOKEN": ""}):
+            self.assertIsNone(github_token())
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "ghp_example_token"}):
+            self.assertEqual(github_token(), "ghp_example_token")
+        for invalid in ("two words", "line\nbreak", "x" * 256):
+            with self.subTest(invalid=invalid[:12]), patch.dict(os.environ, {"GITHUB_TOKEN": invalid}):
+                with self.assertRaises(WorkerConfigurationError):
+                    github_token()
 
     def test_collection_and_grounded_findings(self):
         with httpx.Client(transport=httpx.MockTransport(fixture_response)) as client:

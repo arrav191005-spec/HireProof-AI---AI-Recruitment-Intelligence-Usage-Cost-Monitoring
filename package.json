@@ -13,6 +13,8 @@
     "deploy:demo": "opennextjs-cloudflare build && wrangler deploy --var AUTH_MODE:demo",
     "test": "node --import ./tests/helpers/register-alias.mjs --test \"tests/*.test.js\"",
     "db:migrate": "node database/run-migrations.js",
+    "db:dev:provision": "node database/dev/provision-dev-database.js",
+    "db:dev:backup-check": "node database/dev/backup-restore-check.js",
     "db:seed": "node database/seed.js",
     "db:reset": "node database/reset.js",
     "service": "sh scripts/run-service.sh",

@@ -12,7 +12,7 @@ import {
   cacheVersionFromCookies,
 } from '@/lib/response-cache';
 
-const PROTECTED_PREFIXES = ['/', '/jobs', '/search', '/candidates', '/assessments', '/analytics', '/settings'];
+const PROTECTED_PREFIXES = ['/', '/jobs', '/search', '/candidates', '/assessments', '/verification', '/analytics', '/settings'];
 
 export async function middleware(request) {
   const authMode = process.env.AUTH_MODE === 'supabase';

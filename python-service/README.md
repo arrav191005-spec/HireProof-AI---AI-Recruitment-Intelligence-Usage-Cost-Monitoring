@@ -27,6 +27,69 @@ Environment variables (secrets only ever via env — never hardcoded, never logg
 | `MAX_RESUME_SIZE_MB` | `5` | Decoded PDF size cap → 413 above it |
 | `MAX_TEXT_CHARS` | `400000` | Total extracted text cap (truncate + flag) |
 
+## Isolated development environment (V2 verification)
+
+The V2 workflow needs an isolated local PostgreSQL database plus three separate
+restricted logins. The guarded provisioning script refuses any database name
+outside `hireproof_dev[_<suffix>]` and any non-loopback host. It never connects
+to the existing `hireproof` application database.
+
+```bash
+# one-time, idempotent; local PostgreSQL only
+DEV_ADMIN_URL=postgresql://YOUR_LOCAL_USER@127.0.0.1:5432/postgres \
+  npm run db:dev:provision -- --enable-verification
+npm run db:dev:backup-check
+```
+
+The script creates the NOLOGIN group roles (`hireproof_v2_access`,
+`hireproof_verification_worker`, `hireproof_bootstrap_operator`) and three
+separate LOGIN roles (`hireproof_dev_api`, `hireproof_dev_worker`,
+`hireproof_dev_operator`). It applies migrations 001–013 through the existing
+Node runner, checks RLS, schema ACLs, function grants and default-deny reads,
+then writes `.env.dev.local` (gitignored, mode `0600`) with the development
+connection URLs. Re-run with `DEV_ROTATE_PASSWORDS=1` to rotate the passwords.
+
+The API, worker and operator must use their own logins; never reuse one URL for
+another process. For local convenience, sourcing the whole file is acceptable
+on an isolated workstation, but inject only the variable each process needs in
+any shared deployment:
+
+```bash
+set -a; . ./.env.dev.local; set +a
+
+# API process: V2_DATABASE_URL, SUPABASE_*, API_CORS_ORIGINS,
+# VERIFICATION_ENABLED=true
+python-service/.venv/bin/python python-service/main.py
+
+# worker process (separate shell): VERIFICATION_WORKER_DATABASE_URL,
+# VERIFICATION_ENABLED=true, optional server-side GITHUB_TOKEN
+cd python-service && .venv/bin/python -m app.verification_worker
+
+# optional sanitized monitoring
+cd python-service && .venv/bin/python -m app.verification_monitor --json
+```
+
+`npm run db:dev:backup-check` inserts one disposable marker row, takes a
+custom-format `pg_dump` in a temporary file, restores it into a fresh
+`hireproof_dev_restorecheck_*` database, verifies the marker and migration
+count, then drops the restore database and dump. It refuses non-development
+names and non-loopback hosts.
+
+The student UI at `/verification` calls FastAPI directly (no Next.js API
+routes). Set `API_CORS_ORIGINS` to the exact Next.js origin and expose
+`NEXT_PUBLIC_VERIFICATION_API_URL` to the browser. Both public values may live
+in `.env.local`; Next.js does not read `.env.dev.local`. The page requires a
+real Supabase session (`AUTH_MODE=supabase` and
+`NEXT_PUBLIC_AUTH_MODE=supabase`), and FastAPI needs
+`SUPABASE_AUTH_ISSUER`, `SUPABASE_JWT_AUDIENCE` and
+`SUPABASE_PUBLISHABLE_KEY` for the provider identity check. When those are
+absent the page shows setup instructions instead of fabricating a login.
+
+Verification stays feature-gated: both API and worker return/refuse unless
+`VERIFICATION_ENABLED=true`. Keep it false in `.env.example`, staging,
+production and every shared deployment. The isolated local database is the only
+place this project enables it.
+
 ## Demo vs configured (LLM) mode
 
 - **demo** (no `OPENAI_API_KEY`): deterministic heuristics — a ~45-entry tech
@@ -49,8 +112,9 @@ collector and technology-signal matcher. It never executes repository code or
 calls OpenAI. A source signal is not proof of function or authorship; missing
 signals are not proof of fraud. Collection uses only `https://api.github.com`,
 does not follow redirects, and limits requests, response sizes and duration.
-Private repositories are refused. No GitHub credential is currently loaded or
-used, so the shared unauthenticated GitHub rate limit applies.
+Private repositories are refused. An optional server-side `GITHUB_TOKEN` raises
+the GitHub rate limit; when unset, the shared unauthenticated limit applies.
+The token is read only by the worker, never logged, and never sent to clients.
 
 The authenticated workflow is disabled unless `VERIFICATION_ENABLED=true` is
 set for both the API and worker. When enabled, the scoped endpoints are:
@@ -90,26 +154,67 @@ attempts before its run becomes `failed` with `retry_exhausted`. Identical
 concurrent requests return the existing active run; a different active request
 returns 409. Evidence writes and status changes are audited.
 
-Default tests use deterministic mocked GitHub responses. A read-only live
-collector check can be run with `LIVE_GITHUB_TEST=1`; it is excluded from the
-default suite because it needs public network access and GitHub's anonymous
-rate limit. One manual disposable-database run against the public
-`psf/requests` repository completed through the real worker and pushed
-commit-pinned evidence. No live Supabase authentication test has passed, so the
-complete JWT-to-provider path remains mocked. Leave verification disabled until
-an isolated deployment test passes and the pending migrations are approved and
-applied.
+Migration `012_verification_limits.sql` adds per-user quotas, a global
+running-job ceiling and worker-only aggregate metrics. Defaults are 2 active
+runs, 10 requests/hour and 30 requests/day per user, with at most 4 running
+jobs cluster-wide. Quota checks run inside the security-definer enqueue
+function under a per-user advisory lock; the Python API only maps the resulting
+database exception to a sanitized `429` with `Retry-After`. Values live in the
+`verification_policy` table and are changed only by the migration
+administrator; runtime roles have no table access. Raising a per-user limit
+after a rate-limit response requires more than a new HTTP request.
 
-`database/migrations/003_project_verification.sql` and
-`011_verification_queue.sql` are forward-only; do not run them against a shared
+Read-only queue metrics are available to the worker/monitor login:
+
+```bash
+VERIFICATION_MONITOR_DATABASE_URL=... .venv/bin/python -m app.verification_monitor --json
+```
+
+The metrics function returns aggregate counters only (queue depth, pending,
+running, completed/unavailable/failed over 24 hours, retry count, rate-limit
+count, oldest pending age, average duration and current policy). It never
+returns candidate identifiers, repository URLs, file paths, tokens, provider
+bodies or per-user rows.
+
+Default tests use deterministic mocked GitHub responses. The scoped workflow
+tests run against a disposable, migrated PostgreSQL database with synthetic
+users, short-lived test JWTs and a mocked JWKS resolver. A read-only live
+collector check can be run with `LIVE_GITHUB_TEST=1`; it is excluded from the
+default suite because it needs public network access and GitHub's rate limit.
+One manual disposable-database run against the public `psf/requests` repository
+completed through the real worker and pushed commit-pinned evidence.
+
+A live authentication boundary check is available but has **not** run in this
+environment because no development Supabase project or test user was provided:
+
+```bash
+LIVE_SUPABASE_TEST=1 \
+LIVE_SUPABASE_URL=https://PROJECT-REF.supabase.co \
+LIVE_SUPABASE_PUBLISHABLE_KEY=... \
+LIVE_SUPABASE_TEST_EMAIL=... \
+LIVE_SUPABASE_TEST_PASSWORD=... \
+python -m unittest tests.test_live_supabase_optional -v
+```
+
+It signs in through GoTrue, confirms the token subject against `/auth/v1/user`,
+then requires FastAPI to accept the token through real JWKS discovery. It makes
+no database writes and prints no token or password. The complete live
+JWT-to-provider path therefore remains unverified, and verification must stay
+disabled outside the isolated development environment until that test and an
+isolated deployment review succeed.
+
+`database/migrations/003_project_verification.sql`,
+`011_verification_queue.sql`, `012_verification_limits.sql` and
+`013_project_creation.sql` are forward-only; do not run them against a shared
 or production database without approval. Scoped verification tests require a
 disposable PostgreSQL database whose name starts with `hireproof_rls_`, plus
-`RLS_TEST_ADMIN_URL`, `RLS_TEST_APP_URL` (restricted runtime login) and
-`VERIFICATION_TEST_WORKER_URL` (separate worker login). They create synthetic
-users, projects and applications and drain verification runs between test
-methods; never point them at the application database. The older opt-in
-persistence test uses `VERIFICATION_TEST_DATABASE_URL` and rolls its fixtures
-back.
+`RLS_TEST_ADMIN_URL`, `RLS_TEST_APP_URL` (restricted runtime login),
+`VERIFICATION_TEST_WORKER_URL` (separate worker login) and optionally
+`BOOTSTRAP_TEST_URL` (separate operator login) for the identity/bootstrap
+suites. They create synthetic users, projects and applications and drain
+verification runs between test methods; never point them at the application
+database. The older opt-in persistence test uses
+`VERIFICATION_TEST_DATABASE_URL` and rolls its fixtures back.
 
 ### V2 identity foundation
 
@@ -166,8 +271,11 @@ profile only for a trusted `users` row whose `auth_user_id`
 matches the verified JWT subject and whose server-managed role is `candidate`.
 The request cannot choose an owner, role, or existing candidate. Concurrent
 requests serialize on the user row and return the same candidate. Profile
-updates and project creates/updates require ownership. Project repository
-references and verification results cannot be written by these endpoints.
+updates and project creates/updates require ownership. Migration 013 routes
+project creation through the security-definer `hp_create_project` function,
+which assigns the next per-candidate ordinal under an advisory lock and revokes
+direct project `INSERT` from the runtime group. Project repository references
+and verification results cannot be written by these endpoints.
 
 Existing workspace members can create **draft** jobs and edit their titles;
 they cannot change membership, workspace links, or job status. A trusted
@@ -255,18 +363,20 @@ need separate deployment and security review. Demo mode is not authentication.
 #### Migration and recovery safety
 
 The application database currently has migrations 001 and 002. Migrations 003
-through 011 are pending; the migration runner applies all pending files, and
-005, 010 and 011 require their separately provisioned group roles to exist
-first. Do not run the runner or role
-provisioning against a shared database without explicit approval. Check
-`schema_migrations` checksums against repository files, inspect ownership and
-role settings, and test the complete sequence on an isolated database first.
-Before an approved change, take a provider-supported backup or a `pg_dump`
-custom-format backup using a privileged migration account, store it encrypted
-with restricted access, and validate it with `pg_restore --list`. Rehearse
-recovery into a **new isolated database**, verify records and roles there, and
-follow the provider's approved restore procedure; do not overwrite a live
-database as a test. Backup/restore has not been performed by this project.
+through 013 are pending; the migration runner applies all pending files, and
+005, 010, 011 and 012 require their separately provisioned group roles to exist
+first. Do not run the runner or role provisioning against a shared database
+without explicit approval. Check `schema_migrations` checksums against
+repository files, inspect ownership and role settings, and test the complete
+sequence on an isolated database first. Before an approved change, take a
+provider-supported backup or a `pg_dump` custom-format backup using a privileged
+migration account, store it encrypted with restricted access, and validate it
+with `pg_restore --list`. Rehearse recovery into a **new isolated database**,
+verify records and roles there, and follow the provider's approved restore
+procedure; do not overwrite a live database as a test. A backup/restore
+rehearsal has passed only against the isolated local `hireproof_dev` database
+(`npm run db:dev:backup-check`); no backup or restore has been performed on the
+application database.
 
 ### PostgreSQL configuration
 

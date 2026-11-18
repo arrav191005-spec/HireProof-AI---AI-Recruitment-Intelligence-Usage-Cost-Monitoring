@@ -66,6 +66,12 @@ class StudentWrites(unittest.IsolatedAsyncioTestCase):
         project = await self.client.post("/api/v2/candidates/me/projects", json={"name": "A project"})
         self.assertEqual(project.status_code, 201, project.text)
         project_id = project.json()["id"]
+        second = await self.client.post("/api/v2/candidates/me/projects",
+                                        json={"name": "Another project", "summary": "Second"})
+        self.assertEqual(second.status_code, 201, second.text)
+        self.assertNotEqual(second.json()["id"], project_id)
+        projects = await self.client.get("/api/v2/candidates/me/projects")
+        self.assertEqual([p["name"] for p in projects.json()], ["A project", "Another project"])
         updated = await self.client.patch(f"/api/v2/candidates/me/projects/{project_id}",
                                           json={"name": "Updated project", "summary": "New description"})
         self.assertEqual(updated.json()["name"], "Updated project")
@@ -78,12 +84,18 @@ class StudentWrites(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post("/api/v2/candidates/me",
                                                 json={"full_name": "Bad", "user_id": "other"})).status_code, 422)
         with self.admin.connect() as c:
-            self.assertEqual(c.execute(text("select action from audit_logs where actor=:u and action='project.create'"),
-                                       {"u": "a"+self.s}).scalar_one(), "project.create")
+            self.assertEqual(c.execute(text("select count(*) from audit_logs where actor=:u and action='project.create'"),
+                                       {"u": "a"+self.s}).scalar_one(), 2)
         with self.assertRaises(SQLAlchemyError):
             with scoped_engine().begin() as c:
                 c.execute(text("select set_config('app.subject',:u,true)"), {"u": "b"+self.s})
                 c.execute(text("update projects set candidate_id='other' where id=:id"), {"id": project_id})
+        with self.assertRaises(SQLAlchemyError):
+            with scoped_engine().begin() as c:
+                c.execute(text("select set_config('app.subject',:u,true)"), {"u": "a"+self.s})
+                c.execute(text("insert into projects(candidate_id,name) values (:cid,'direct')"),
+                          {"cid": c.execute(text("select candidate_id from candidate_owners where user_id=:u"),
+                                            {"u": "a"+self.s}).scalar_one()})
         with self.assertRaises(SQLAlchemyError):
             with scoped_engine().begin() as c:
                 c.execute(text("delete from audit_logs"))

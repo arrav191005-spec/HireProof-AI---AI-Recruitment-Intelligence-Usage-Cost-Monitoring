@@ -168,10 +168,9 @@ def candidate_projects(identity: Identity = Depends(require_identity)):
 @router.post("/candidates/me/projects", response_model=CandidateProject, status_code=201)
 def create_project(body: ProjectWrite, identity: Identity = Depends(require_identity)):
     def write(conn):
-        candidate = own_candidate(conn)
         row = conn.execute(text(
-            "insert into projects (candidate_id,name,summary) values (:cid,:name,:summary) returning id,name"
-        ), {"cid": candidate["id"], "name": body.name, "summary": body.summary}).mappings().one()
+            "select id, name from hp_create_project(:name,:summary)"
+        ), {"name": body.name, "summary": body.summary}).mappings().one()
         return dict(row)
     return scoped_read(identity.subject, write)
 

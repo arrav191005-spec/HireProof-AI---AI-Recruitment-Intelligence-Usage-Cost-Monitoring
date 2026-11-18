@@ -11,11 +11,21 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
-from .github_verification import GitHubCollector, VerificationUnavailable, evaluate_claims
+from .github_verification import GitHubCollector, VerificationUnavailable, github_headers, evaluate_claims
 
 
 class WorkerConfigurationError(Exception):
     pass
+
+
+def github_token() -> str | None:
+    """Optional server-side token. Invalid values fail closed without logging."""
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token:
+        return None
+    if len(token) > 255 or not token.isascii() or any(char.isspace() for char in token):
+        raise WorkerConfigurationError()
+    return token
 
 
 def worker_engine():
@@ -31,7 +41,7 @@ def worker_engine():
     return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
 
 
-def _assert_role(conn):
+def assert_worker_role(conn):
     allowed = conn.execute(text("""
       select not r.rolsuper and not r.rolbypassrls and not r.rolcreaterole
         and pg_has_role(current_user,'hireproof_verification_worker','member')
@@ -51,7 +61,7 @@ def _assert_role(conn):
 
 def process_one(engine, client: httpx.Client) -> str:
     with engine.begin() as conn:
-        _assert_role(conn)
+        assert_worker_role(conn)
         job = conn.execute(text("select * from hp_claim_verification_job()")).mappings().first()
     if job is None:
         return "idle"
@@ -75,7 +85,7 @@ def process_one(engine, client: httpx.Client) -> str:
         # Never log candidate data, repository paths, or provider responses.
         error = "internal_error"
     with engine.begin() as conn:
-        _assert_role(conn)
+        assert_worker_role(conn)
         saved = conn.execute(text("""
             select hp_finish_verification_job(:id,:token,:sha,cast(:findings as jsonb),:error)
         """), {"id": job["job_id"], "token": job["lease_token"], "sha": sha,
@@ -90,7 +100,7 @@ def main():
     engine = None
     try:
         engine = worker_engine()
-        with httpx.Client(headers={"User-Agent": "HireProof-AI-Verification", "Accept": "application/vnd.github+json"}) as client:
+        with httpx.Client(headers=github_headers(github_token())) as client:
             print(process_one(engine, client))
         return 0
     except (WorkerConfigurationError, SQLAlchemyError, ValueError):

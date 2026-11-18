@@ -8,9 +8,12 @@ stack traces, resume contents, or secrets. Access logs contain paths only.
 from __future__ import annotations
 
 import logging
+import os
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -58,13 +61,52 @@ app.include_router(scoped_router)
 app.include_router(project_verification_router)
 
 
+def cors_origins() -> list[str]:
+    """Explicit browser origins only. Unset means no cross-origin access.
+
+    The temporary Next.js shell calls FastAPI directly from the browser during
+    the migration to a standalone React app. Credentials are bearer tokens, so
+    cookie credentials stay disabled and every origin must be listed exactly.
+    """
+    origins = []
+    for raw in os.environ.get("API_CORS_ORIGINS", "").split(","):
+        value = raw.strip()
+        if not value:
+            continue
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme in {"http", "https"}
+            and parsed.netloc
+            and not parsed.path.strip("/")
+            and not parsed.query
+            and not parsed.fragment
+            and not parsed.username
+            and not parsed.password
+        ):
+            origins.append(f"{parsed.scheme}://{parsed.netloc}")
+    return origins
+
+
+_origins = cors_origins()
+if _origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
+        max_age=600,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Exception handlers -> always {"detail": ...} JSON, never tracebacks/details
 # --------------------------------------------------------------------------- #
 @app.exception_handler(StarletteHTTPException)
 async def _http_exception_handler(request, exc: StarletteHTTPException) -> JSONResponse:
     detail = exc.detail if isinstance(exc.detail, str) else "Request failed."
-    return JSONResponse(status_code=exc.status_code, content={"detail": detail})
+    return JSONResponse(status_code=exc.status_code, content={"detail": detail},
+                        headers=exc.headers)
 
 
 @app.exception_handler(RequestValidationError)
