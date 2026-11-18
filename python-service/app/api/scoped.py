@@ -1,9 +1,13 @@
 """Read-only private API. Writes and verification execution remain disabled."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
+import hashlib
+import secrets
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
-from ..auth import Identity, require_identity
+from ..auth import Identity, bearer, require_identity
+from fastapi.security import HTTPAuthorizationCredentials
+from ..provider_identity import confirmed_email
 from ..scoped_db import scoped_read
 
 router = APIRouter(prefix="/api/v2", tags=["scoped reads"])
@@ -48,6 +52,50 @@ class ProjectWrite(BaseModel):
 class JobWrite(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     title: str = Field(min_length=1, max_length=120)
+
+
+class InvitationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    invitee_user_id: str = Field(min_length=1, max_length=128)
+
+
+class InvitationToken(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=32, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class CreatedInvitation(BaseModel):
+    id: str
+    token: str
+
+
+class AcceptedInvitation(BaseModel):
+    workspace_id: str
+
+
+class StudentIdentity(BaseModel):
+    user_id: str
+
+
+def require_workspace_admin(conn, workspace_id):
+    ok = conn.execute(text("""
+        select exists(select 1 from workspace_memberships
+          where workspace_id=:wid and user_id=hp_user_id() and role='admin')
+    """), {"wid": workspace_id}).scalar_one()
+    if not ok:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+
+
+@router.post("/accounts/student", response_model=StudentIdentity)
+def provision_student_identity(identity: Identity = Depends(require_identity),
+                               credentials: HTTPAuthorizationCredentials = Depends(bearer)):
+    email = confirmed_email(identity, credentials.credentials)
+    def write(conn):
+        user_id = conn.execute(text("select hp_provision_student_identity(:email)"), {"email": email}).scalar_one()
+        if user_id is None:
+            raise HTTPException(status_code=409, detail="Identity cannot be provisioned automatically.")
+        return {"user_id": user_id}
+    return scoped_read(identity.subject, write)
 
 
 def own_candidate(conn):
@@ -174,3 +222,49 @@ def update_workspace_job(workspace_id: str, job_id: str, body: JobWrite,
             raise HTTPException(status_code=404, detail="Job not found.")
         return dict(row)
     return scoped_read(identity.subject, write)
+
+
+@router.post("/recruiter/workspaces/{workspace_id}/invitations",
+             response_model=CreatedInvitation, status_code=201)
+def create_invitation(workspace_id: str, body: InvitationCreate, response: Response,
+                      identity: Identity = Depends(require_identity)):
+    response.headers["Cache-Control"] = "no-store"
+    token = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(token.encode("ascii")).hexdigest()
+    def write(conn):
+        require_workspace_admin(conn, workspace_id)
+        invitation_id = conn.execute(text("select hp_create_invitation(:wid,:invitee,:digest)"),
+            {"wid": workspace_id, "invitee": body.invitee_user_id, "digest": digest}).scalar_one()
+        return {"id": invitation_id, "token": token}
+    return scoped_read(identity.subject, write)
+
+
+@router.post("/recruiter/invitations/accept", response_model=AcceptedInvitation)
+def accept_invitation(body: InvitationToken, identity: Identity = Depends(require_identity)):
+    digest = hashlib.sha256(body.token.encode("ascii")).hexdigest()
+    def write(conn):
+        workspace_id = conn.execute(text("select hp_accept_invitation(:digest)"), {"digest": digest}).scalar_one()
+        if workspace_id is None:
+            raise HTTPException(status_code=404, detail="Invitation unavailable.")
+        return {"workspace_id": workspace_id}
+    return scoped_read(identity.subject, write)
+
+
+@router.delete("/recruiter/workspaces/{workspace_id}/invitations/{invitation_id}", status_code=204)
+def revoke_invitation(workspace_id: str, invitation_id: str, identity: Identity = Depends(require_identity)):
+    def write(conn):
+        require_workspace_admin(conn, workspace_id)
+        if not conn.execute(text("select hp_revoke_invitation(:wid,:iid)"),
+                            {"wid": workspace_id, "iid": invitation_id}).scalar_one():
+            raise HTTPException(status_code=404, detail="Invitation unavailable.")
+    scoped_read(identity.subject, write)
+
+
+@router.delete("/recruiter/workspaces/{workspace_id}/members/{user_id}", status_code=204)
+def revoke_member(workspace_id: str, user_id: str, identity: Identity = Depends(require_identity)):
+    def write(conn):
+        require_workspace_admin(conn, workspace_id)
+        if not conn.execute(text("select hp_revoke_recruiter(:wid,:target)"),
+                            {"wid": workspace_id, "target": user_id}).scalar_one():
+            raise HTTPException(status_code=404, detail="Membership unavailable.")
+    scoped_read(identity.subject, write)

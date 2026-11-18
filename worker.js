@@ -159,7 +159,9 @@ export default {
     // version metadata, hence the stable `dev` fallback.
     const buildId = env.CF_VERSION_METADATA?.id || 'dev';
 
-    if (request.method === 'GET') {
+    // Never serve an old cached legacy page ahead of the PostgreSQL isolation
+    // check. A configured DB must reach the repository's fail-closed path.
+    if (request.method === 'GET' && !env.DATABASE_URL && !process.env.DATABASE_URL) {
       const hit = await tryCacheHit(request, env, buildId);
       if (hit) return hit;
     }

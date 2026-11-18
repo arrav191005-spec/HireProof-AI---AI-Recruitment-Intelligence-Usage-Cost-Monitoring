@@ -102,16 +102,15 @@ Migration 005 grants this group read-only access under RLS; it grants no writes.
 The service checks role properties before scoped reads. Database credentials
 must never reach clients: anyone with the database login can set `app.subject`
 directly. Role and schema configuration must be verified before deployment.
-Trusted identity, workspace and membership provisioning and invitations
-are not implemented. Existing legacy APIs still use their own database
-connection; they are not covered by these new policies and must be secured or
-retired separately.
+Recruiter identity and workspace bootstrap are not implemented. Existing
+legacy APIs are not covered by these new policies and must remain isolated or
+be retired separately.
 
 ### Scoped write foundation (not production provisioning)
 
 Migrations 006 and 007 add limited student profile/project writes and
 workspace-member job title writes. `POST /api/v2/candidates/me` creates a new
-profile only for a pre-provisioned trusted `users` row whose `auth_user_id`
+profile only for a trusted `users` row whose `auth_user_id`
 matches the verified JWT subject and whose server-managed role is `candidate`.
 The request cannot choose an owner, role, or existing candidate. Concurrent
 requests serialize on the user row and return the same candidate. Profile
@@ -123,9 +122,28 @@ they cannot change membership, workspace links, or job status. A trusted
 operator must establish the first workspace, administrator membership, and
 provider-to-user mappings outside the public API after independent identity
 verification and an approved authorization process. No automated bootstrap,
-recruiter-profile provisioning, invitation, acceptance, revocation endpoint, or
-workspace creation API exists yet. Never provision an administrator based on
-user-editable JWT metadata.
+recruiter-profile provisioning, or workspace creation API exists yet. Never
+provision an administrator based on user-editable JWT metadata.
+
+`POST /api/v2/accounts/student` first validates the JWT and then checks the
+same subject and confirmed email against Supabase Auth's `/user` endpoint,
+using `SUPABASE_PUBLISHABLE_KEY`. It creates only a candidate-role user mapping;
+it never claims an existing profile or automatically merges email conflicts.
+An operator must resolve account recovery and existing-email conflicts after
+independent verification. No live Supabase provider test has been performed.
+
+Workspace admins can issue a single-use, 24-hour invitation to an already
+operator-provisioned recruiter identity via
+`POST /api/v2/recruiter/workspaces/{id}/invitations`. The token is returned
+once with `Cache-Control: no-store`; only its SHA-256 hash is stored. Deliver
+the token through a secure channel: no email delivery service exists. An
+authenticated invitee accepts via `POST /api/v2/recruiter/invitations/accept`.
+Acceptance binds to the pre-provisioned application identity, not the
+unverified address typed by an inviter. An admin may revoke an invitation or a
+recruiter membership using the corresponding DELETE endpoints; revoking a
+membership also revokes outstanding invitations for that user and workspace.
+Invitation and membership actions create transactional audit records without
+the token. There is no role-change or administrator-removal API.
 
 Student create/update, project create/update, and job create/update write audit
 records in the same database transaction. Metadata records field names rather
@@ -137,15 +155,19 @@ independent tamper-proof audit store.
 The legacy Next.js routes under `app/api/candidates`, `app/api/resumes`,
 `app/api/evidence`, `app/api/applications`, `app/api/jobs`, `app/api/search`,
 `app/api/assessments`, and `app/api/analytics` use the legacy repository and
-shared recruiter authentication, not V2 ownership/workspace policies. They
-must not be exposed alongside real private V2 data without a separate security
-review, isolation, or migration. Existing demo mode is not authentication.
-These routes were not changed in this phase.
+shared recruiter authentication, not V2 ownership/workspace policies. Legacy
+Next.js repository access now fails closed whenever `DATABASE_URL` is set;
+server-rendered pages also use this repository. This intentionally disables
+legacy PostgreSQL-backed functionality, and older deployments are unaffected
+until explicitly updated. Without `DATABASE_URL`, the legacy demo store is
+available, but it must contain synthetic data only. Legacy endpoints outside
+the repository, old deployments, cached responses, and stored uploads still
+need separate deployment and security review. Demo mode is not authentication.
 
 #### Migration and recovery safety
 
 The application database currently has migrations 001 and 002. Migrations 003
-through 007 are pending; the migration runner applies all pending files, and
+through 009 are pending; the migration runner applies all pending files, and
 005 requires the group role to exist first. Do not run the runner or role
 provisioning against a shared database without explicit approval. Check
 `schema_migrations` checksums against repository files, inspect ownership and

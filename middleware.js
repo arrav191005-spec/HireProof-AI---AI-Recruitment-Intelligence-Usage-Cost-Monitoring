@@ -74,7 +74,9 @@ export async function middleware(request) {
     session?.user && session.access_token &&
     (!session.expires_at || session.expires_at * 1000 > Date.now())
   );
-  const cacheVariant = sessionUsable
+  // PostgreSQL-backed legacy pages must not be returned from a cache before
+  // the legacy repository's fail-closed isolation check runs.
+  const cacheVariant = sessionUsable && !process.env.DATABASE_URL
     ? responseCacheVariant(request.method, pathname, (name) => request.headers.get(name))
     : null;
   const cacheVersion = request.cookies.get('hp-v')?.value || '0';
