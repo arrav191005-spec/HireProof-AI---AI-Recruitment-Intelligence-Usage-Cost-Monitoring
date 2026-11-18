@@ -15,7 +15,7 @@ import Badge from '@/components/ui/Badge';
 import { getSupabaseBrowserClient, supabaseBrowserConfigured } from '@/lib/supabase/client';
 import {
   ShieldCheck, Github, Play, RefreshCw, FolderPlus, Clock, ExternalLink, Lock,
-  LogOut, Languages, ListChecks, MinusCircle, FileText,
+  LogOut, Languages, ListChecks, MinusCircle, FileText, Sparkles,
 } from 'lucide-react';
 
 const API_BASE = (process.env.NEXT_PUBLIC_VERIFICATION_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
@@ -130,6 +130,11 @@ function EvidenceGroup({ title, description, items, tone = 'slate', icon: Icon }
               <EvidenceStatusBadge status={item.status} />
             </div>
             <p className="mt-2 text-[13px] leading-5 text-slate-600">{item.explanation}</p>
+            {item.source_excerpt && (
+              <blockquote className="mt-2 border-l-2 border-brand-200 bg-slate-50 px-3 py-2 font-mono text-[11px] leading-4 text-slate-600">
+                {item.source_excerpt}
+              </blockquote>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
               {item.file_path && (
                 <span className="inline-flex items-center gap-1 font-mono">
@@ -200,6 +205,10 @@ export default function StudentVerification() {
   const [claims, setClaims] = useState(['React', 'FastAPI']);
   const [report, setReport] = useState(null);
   const [reportVersion, setReportVersion] = useState(0);
+  const [resumes, setResumes] = useState([]);
+  const [selectedResumeId, setSelectedResumeId] = useState('');
+  const [aiConsent, setAiConsent] = useState(false);
+  const [aiReport, setAiReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
@@ -311,6 +320,23 @@ export default function StudentVerification() {
     })();
     return () => { active = false; };
   }, [auth.state, request, loadProjects]);
+
+  useEffect(() => {
+    if (auth.state !== 'ready' || !candidate) return undefined;
+    let active = true;
+    request('/api/v2/candidates/me/resumes')
+      .then((rows) => {
+        if (!active) return;
+        setResumes(rows);
+        setSelectedResumeId((current) => current || rows[0]?.id || '');
+      })
+      .catch((loadError) => {
+        if (active && (!(loadError instanceof ApiError) || loadError.status !== 404)) {
+          setError(friendlyError(loadError));
+        }
+      });
+    return () => { active = false; };
+  }, [auth.state, candidate, request]);
 
   useEffect(() => {
     if (!selectedProjectId) {
@@ -475,6 +501,25 @@ export default function StudentVerification() {
       if (signOutError) throw signOutError;
     } catch {
       setError('Could not end the Supabase session. Try again.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function onAnalyzeResume() {
+    if (!selectedResumeId || !aiConsent) return;
+    setBusy('ai');
+    setError(null);
+    setNotice(null);
+    try {
+      const value = await request('/api/v2/candidates/me/resume-intelligence', {
+        method: 'POST',
+        body: JSON.stringify({ resume_id: selectedResumeId, consent_to_external_ai: true }),
+      });
+      setAiReport(value);
+      setNotice('Resume intelligence report completed. Review every extracted claim before relying on it.');
+    } catch (analysisError) {
+      setError(friendlyError(analysisError));
     } finally {
       setBusy('');
     }
@@ -721,6 +766,78 @@ export default function StudentVerification() {
                     <p className="text-[12px] text-slate-500">A verification is already active; status refreshes automatically every 5 seconds.</p>
                   )}
                 </form>
+              </CardBody>
+            </Card>
+
+            <Card>
+              <CardHeader
+                title="Resume intelligence"
+                subtitle="Optional, consented extraction and claim analysis. AI output is advisory and requires review."
+                actions={<Badge tone="navy"><Sparkles size={11} aria-hidden /> AI-assisted</Badge>}
+              />
+              <CardBody className="space-y-3">
+                {resumes.length === 0 ? (
+                  <p className="text-[13px] leading-5 text-slate-500">
+                    Upload and review a resume first to run an analysis. No resume text is sent to an AI provider from this page.
+                  </p>
+                ) : (
+                  <>
+                    <label className="block text-[13px] font-medium text-slate-700">
+                      Resume
+                      <select
+                        value={selectedResumeId}
+                        onChange={(event) => setSelectedResumeId(event.target.value)}
+                        className="field mt-1.5 w-full"
+                      >
+                        {resumes.map((resume) => (
+                          <option key={resume.id} value={resume.id}>
+                            {resume.filename || 'Untitled resume'} · {new Date(resume.uploaded_at).toLocaleDateString()}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex cursor-pointer items-start gap-2 text-[12px] leading-5 text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={aiConsent}
+                        onChange={(event) => setAiConsent(event.target.checked)}
+                        className="mt-1"
+                      />
+                      <span>
+                        I consent to sending a minimized version of this resume to the configured external AI provider for this analysis.
+                        Contact details are redacted where possible.
+                      </span>
+                    </label>
+                    <Button type="button" size="sm" onClick={onAnalyzeResume}
+                      disabled={busy === 'ai' || !selectedResumeId || !aiConsent}>
+                      {busy === 'ai' ? <Spinner size={13} /> : <Sparkles size={13} aria-hidden />}
+                      {busy === 'ai' ? 'Analyzing…' : 'Analyze resume'}
+                    </Button>
+                  </>
+                )}
+                {aiReport && (
+                  <div className="space-y-3 border-t border-slate-100 pt-3">
+                    <p className="text-[11px] text-slate-400">Model: {aiReport.model_identifier || 'not available'} · Run {aiReport.run_id}</p>
+                    {aiReport.result?.summary && <p className="text-[13px] leading-5 text-slate-600">{aiReport.result.summary}</p>}
+                    <div className="flex flex-wrap gap-1.5">
+                      {(aiReport.result?.skills || []).map((skill) => <Badge key={skill} tone="blue">{skill}</Badge>)}
+                    </div>
+                    {(aiReport.claims || []).map((claim) => (
+                      <div key={claim.claim_text} className="rounded-lg border border-slate-200 p-3 text-[12px]">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium text-slate-800">{claim.claim_text}</span>
+                          <EvidenceStatusBadge status={claim.classification === 'supported' ? 'supporting' : claim.classification === 'partially_supported' ? 'partial' : 'needs_review'} />
+                        </div>
+                        <p className="mt-1 text-slate-500">{claim.explanation}</p>
+                        {claim.source_excerpt && <p className="mt-1 rounded bg-slate-50 p-2 font-mono text-[11px] text-slate-600">{claim.source_excerpt}</p>}
+                        {claim.source_url && <a href={claim.source_url} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-brand-700 hover:underline">Evidence source <ExternalLink size={10} /></a>}
+                      </div>
+                    ))}
+                    <p className="text-[11px] leading-4 text-slate-400">
+                      AI output is not proof of authorship, working functionality, deployment, or candidate honesty. Review claims and sources manually.
+                    </p>
+                  </div>
+                )}
               </CardBody>
             </Card>
           </div>

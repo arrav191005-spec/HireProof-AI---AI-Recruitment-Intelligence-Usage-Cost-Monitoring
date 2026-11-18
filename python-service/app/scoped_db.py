@@ -35,8 +35,10 @@ def scoped_read(subject, callback):
                     where n.nspname='public' and c.relname in
                       ('users','candidates','resumes','projects','applications','jobs',
                        'candidate_owners','workspaces','workspace_memberships','workspace_jobs',
-                       'project_verification_runs','project_verification_evidence',
-                       'certificates','certificate_verification_runs')
+                        'project_verification_runs','project_verification_evidence',
+                        'certificates','certificate_verification_runs',
+                        'resume_ai_analysis_runs','resume_project_claims',
+                        'job_compatibility_runs','ai_request_usage')
                       and pg_has_role(current_user, c.relowner, 'MEMBER')
                   )
                 from pg_roles r where r.rolname=current_user

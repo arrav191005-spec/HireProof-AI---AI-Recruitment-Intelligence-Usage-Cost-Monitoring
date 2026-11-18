@@ -235,6 +235,10 @@ boundary test, worker environment separation, migration 014, and the
 evidence-scope limitations, see
 [`../docs/phase-11-development.md`](../docs/phase-11-development.md).
 
+Phase 12's opt-in OpenAI Responses API integration, consent requirement,
+grounding rules, RLS migrations and live-provider boundary are documented in
+[`../docs/phase-12-ai-intelligence.md`](../docs/phase-12-ai-intelligence.md).
+
 Migration `004_workspace_ownership.sql` defines explicit candidate ownership,
 workspace membership and job-workspace links, initially with no assignments,
 client grants or permissive RLS policies. It has not been applied to the

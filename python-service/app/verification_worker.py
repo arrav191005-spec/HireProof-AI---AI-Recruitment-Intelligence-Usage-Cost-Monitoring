@@ -78,7 +78,7 @@ def process_one(engine, client: httpx.Client) -> str:
         results = [
             {"claim_id": claim["id"], "status": finding.status,
              "explanation": finding.explanation, "source_url": finding.source_url,
-             "file_path": finding.file_path}
+             "file_path": finding.file_path, "source_excerpt": finding.source_excerpt}
             for claim, finding in zip(claims, evaluated, strict=True)
         ]
     except VerificationUnavailable as exc:

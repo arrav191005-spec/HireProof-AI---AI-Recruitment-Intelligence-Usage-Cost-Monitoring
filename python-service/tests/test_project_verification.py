@@ -257,7 +257,7 @@ class ProjectVerificationTests(unittest.IsolatedAsyncioTestCase):
             finding = [{"claim_id": claims[0]["id"], "status": "supporting",
                         "explanation": "A bounded file inspection found FastAPI.",
                         "source_url": "https://github.com/example/project/blob/" + SHA + "/app/main.py",
-                        "file_path": "app/main.py"}]
+                        "file_path": "app/main.py", "source_excerpt": "from fastapi import FastAPI"}]
             params = {"id": job["job_id"], "sha": SHA, "findings": json.dumps(finding),
                       "languages": json.dumps({"Python": 120, "TypeScript": 80})}
             self.assertFalse(c.execute(text("select hp_finish_verification_job(:id,'forged',:sha,cast(:findings as jsonb),cast(:languages as jsonb),null)"),

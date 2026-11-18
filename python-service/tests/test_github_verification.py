@@ -66,6 +66,7 @@ class GithubTests(unittest.TestCase):
         results = evaluate_claims(snapshot, ["React", "FastAPI", "Python", "Spring Boot", "invented feature"])
         self.assertEqual([f.status for f in results], ["supporting", "supporting", "supporting", "not_established", "needs_review"])
         self.assertTrue(all(f.source_url and SHA in f.source_url for f in results[:3]))
+        self.assertTrue(all(f.source_excerpt for f in results[:3]))
         self.assertIsNone(results[3].source_url)
         self.assertEqual(snapshot["languages"], {"Python": 123})
 

@@ -150,6 +150,7 @@ class Finding:
     source_url: str | None = None
     file_path: str | None = None
     commit_sha: str | None = None
+    source_excerpt: str | None = None
 
 
 class GitHubCollector:
@@ -231,6 +232,14 @@ _PATTERNS = {
 }
 
 
+def _excerpt(text: str, match: re.Match) -> str:
+    """Return a small printable context around a deterministic match."""
+    start = max(0, match.start() - 120)
+    end = min(len(text), match.end() + 180)
+    value = " ".join(text[start:end].split())
+    return value[:500]
+
+
 def evaluate_claims(snapshot: dict, claims: list[str]) -> list[Finding]:
     findings = []
     for claim in claims:
@@ -243,9 +252,11 @@ def evaluate_claims(snapshot: dict, claims: list[str]) -> list[Finding]:
             if file["path"].lower().split("/")[-1].startswith("readme"):
                 continue
             target = file["path"] if claim.strip().lower() in {"javascript", "typescript", "python", "java"} else file["text"]
-            if pattern.search(target):
+            match = pattern.search(target)
+            if match:
+                excerpt = _excerpt(file["text"], match) if target == file["text"] else file["path"]
                 findings.append(Finding(claim, "supporting", "A repository file contains a matching technology signal; this does not establish functionality or authorship.",
-                                        file["url"], file["path"], snapshot["commit_sha"]))
+                                        file["url"], file["path"], snapshot["commit_sha"], excerpt))
                 break
         else:
             findings.append(Finding(claim, "not_established", "No matching signal was found in the bounded set of inspected files."))

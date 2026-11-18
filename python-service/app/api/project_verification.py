@@ -50,6 +50,7 @@ class Evidence(BaseModel):
     source_url: str | None
     file_path: str | None
     commit_sha: str | None
+    source_excerpt: str | None
 
 
 class VerificationReport(BaseModel):
@@ -88,7 +89,7 @@ def _report(conn, project_id, run_id=None):
     if row is None:
         raise HTTPException(status_code=404, detail="Verification not found.")
     evidence = conn.execute(text("""
-        select e.id,c.claim_text as claim,e.status,e.explanation,e.source_url,e.file_path,e.commit_sha
+        select e.id,c.claim_text as claim,e.status,e.explanation,e.source_url,e.file_path,e.commit_sha,e.source_excerpt
         from project_verification_evidence e join project_claims c on c.id=e.claim_id
         where e.run_id=:rid order by e.id
     """), {"rid": row["id"]}).mappings()
