@@ -37,6 +37,11 @@ export function buildSslConfig() {
   if (isWorkersRuntime()) {
     return false;
   }
+  // Local PostgreSQL (Homebrew/Postgres.app) serves plain TCP by default.
+  // This is an explicit opt-in so remote/managed databases keep TLS.
+  if (process.env.DATABASE_SSL === 'disable') {
+    return false;
+  }
   // On Cloudflare Workers (OpenNext) `node:fs` exists but most methods throw,
   // and the PEM would not be in the bundle anyway — fall back to encryption
   // without pinning there, exactly like the no-PEM path below.

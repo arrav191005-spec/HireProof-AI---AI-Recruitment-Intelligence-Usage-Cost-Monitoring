@@ -94,6 +94,16 @@ function corpusEntry(overrides = {}) {
   };
 }
 
+test('ranked projected search results do not expose private source records', () => {
+  const corpus = toClientCorpus([corpusEntry()]);
+  const { results } = searchCandidates(corpus, { query: 'React' });
+  assert.equal(results.length, 1);
+  const serialized = JSON.stringify(results);
+  for (const secret of ['mira@example.com', 'private resume text', 'private submission', 'private assessment instructions', 'internal note']) {
+    assert.equal(serialized.includes(secret), false, `leaked: ${secret}`);
+  }
+});
+
 test('toClientCorpus strips PII, resumes and submission payloads', () => {
   const [entry] = toClientCorpus([corpusEntry()]);
   const serialized = JSON.stringify(entry);

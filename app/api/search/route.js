@@ -2,6 +2,7 @@ import getRepo, { getBackendInfo } from '@/lib/repo';
 import { ok, fail, requireUser, validate, handleRouteError } from '@/lib/api';
 import { searchRequestSchema } from '@/lib/validation';
 import { searchCandidates, parseQuery } from '@/lib/search/engine';
+import { toClientCorpus } from '@/lib/search/client-corpus';
 import { semanticAvailable } from '@/lib/search/semantic';
 
 export const dynamic = 'force-dynamic';
@@ -39,7 +40,9 @@ export async function POST(request) {
       jobRequirements = await repo.getJobRequirements(data.jobId);
     }
 
-    const corpus = await repo.searchCorpus();
+    // Search results are returned directly to API clients. Keep the same
+    // data-minimisation boundary used by the browser search page.
+    const corpus = toClientCorpus(await repo.searchCorpus());
     const semantic = await semanticAvailable();
     const { results, parsed, mode } = searchCandidates(corpus, {
       query: data.query,

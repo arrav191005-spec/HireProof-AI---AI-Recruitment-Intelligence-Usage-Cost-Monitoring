@@ -42,6 +42,70 @@ Environment variables (secrets only ever via env — never hardcoded, never logg
 
 ## Endpoints
 
+### GitHub verification (development only)
+
+`app/github_verification.py` contains a bounded, deterministic public-repository
+collector and technology-signal matcher. It never executes repository code or
+calls OpenAI. A source signal is not proof of function or authorship; missing
+signals are not proof of fraud. Collection uses only `https://api.github.com`,
+does not follow redirects, and limits requests, response sizes and duration.
+The caller must supply an `httpx.Client`; no GitHub credential is currently
+loaded or used, and private repositories are not supported.
+
+Candidate-specific verification routes intentionally return 503 until
+candidate ownership and recruiter workspace authorization exist. No production
+verification workflow, retry worker, or AI interpretation is enabled.
+`database/migrations/003_project_verification.sql` is forward-only; do not run
+it against a shared or production database without approval. To run the
+opt-in persistence test, set `VERIFICATION_TEST_DATABASE_URL` to a disposable
+PostgreSQL database with migrations applied; its test fixtures are rolled back.
+
+### PostgreSQL configuration
+
+The Python service reads `DATABASE_URL` from its **process environment**; it
+does not automatically read the root `.env.local`. For example, set it in the
+service's secret manager before starting the service. PostgreSQL URLs are
+handled with psycopg 3 and default to `sslmode=verify-full`; configure the
+server CA as needed. For a trusted local PostgreSQL instance without TLS,
+explicitly append `?sslmode=disable` to the local URL. Never use that option
+for remote deployments.
+
+`GET /api/v2/ready` verifies a real database connection and that the existing
+`jobs` table can be queried; it does not check other dependencies or every
+schema migration. `GET /api/v2/jobs` is an unauthenticated, deliberately
+minimal public listing of up to 100 open job IDs and titles, without candidate
+data. Do not mark jobs open if their titles are not intended to be public.
+Both return 503 without exposing connection details if the database is
+unavailable. `/api/v2/health` remains a separate liveness check.
+
+The existing `database/migrations/*.sql` and migration runner remain the sole
+schema authority. Python models map a subset of existing columns and must not
+be used to generate tables or Alembic autogeneration against this schema.
+There are no dedicated certificate or verification-run tables yet; these need
+a separately reviewed forward migration. No database schema is changed on
+service startup.
+
+Run Python API tests with `cd python-service && .venv/bin/python -m unittest
+discover -s tests -v`. PostgreSQL integration tests are skipped unless
+`TEST_DATABASE_URL` is explicitly supplied. Use a dedicated test database:
+those tests commit a uniquely named synthetic job, verify it across sessions,
+and delete that test-owned row. They do not migrate or seed the database.
+Run the existing extraction script separately with
+`.venv/bin/python tests/test_extraction.py`.
+
+### `GET /api/v2/health`
+
+The first versioned application API endpoint is a liveness check. It does not
+verify database, authentication, storage, or external-provider readiness. The
+existing document endpoints remain unchanged during migration.
+
+Run its API tests from the repository root:
+
+```bash
+cd python-service
+.venv/bin/python -m unittest discover -s tests -p 'test_v2_health.py' -v
+```
+
 ### `GET /health`
 
 ```bash
