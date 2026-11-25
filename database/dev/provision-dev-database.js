@@ -274,6 +274,16 @@ async function inspect(adminUrl, urls) {
 
     await record('API role can enqueue verification', () =>
       expectOk(admin, `select has_function_privilege('hireproof_dev_api', 'hp_enqueue_verification(bigint,text,text[])', 'EXECUTE') as ok`));
+    await record('AI runs require the quota-reserving function', async () => {
+      const row = (await run(admin, `
+        select has_function_privilege('hireproof_dev_api',
+                 'hp_start_ai_analysis_run(text,text,numeric)', 'EXECUTE') as can_start,
+               has_table_privilege('hireproof_dev_api', 'resume_ai_analysis_runs', 'INSERT') as can_insert,
+               has_function_privilege('hireproof_dev_worker',
+                 'hp_start_ai_analysis_run(text,text,numeric)', 'EXECUTE') as worker_can_start
+      `)).rows[0];
+      return row.can_start === true && row.can_insert === false && row.worker_can_start === false;
+    });
     await record('API role cannot claim or finalize verification', async () => {
       const row = (await run(admin, `
         select has_function_privilege('hireproof_dev_api', 'hp_claim_verification_job()', 'EXECUTE') as claim,

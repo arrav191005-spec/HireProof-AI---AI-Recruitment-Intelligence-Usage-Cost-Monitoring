@@ -83,6 +83,9 @@ class ResumeIntelligenceApiTests(unittest.IsolatedAsyncioTestCase):
         scoped_engine.cache_clear()
         self.env.stop()
         with self.admin.begin() as conn:
+            conn.execute(text(
+                "update ai_analysis_policy set max_requests_per_hour=3,max_requests_per_day=10,max_daily_cost_usd=0.50"
+            ))
             conn.execute(text("delete from project_verification_evidence where project_id=:id"), {"id": self.project})
             conn.execute(text("delete from projects where id=:id"), {"id": self.project})
             conn.execute(text("delete from applications where candidate_id=:id"), {"id": self.candidate})
@@ -118,6 +121,16 @@ class ResumeIntelligenceApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(conn.execute(text(
                 "select count(*) from resume_project_claims where analysis_run_id=:id"
             ), {"id": body["run_id"]}).scalar_one(), 1)
+        with self.admin.begin() as conn:
+            conn.execute(text("update ai_analysis_policy set max_requests_per_hour=1"))
+        self.as_subject(self.user)
+        with patch("app.api.resume_intelligence.get_ai_provider",
+                   return_value=FixtureAIProvider(PAYLOAD)):
+            limited = await self.client.post("/api/v2/candidates/me/resume-intelligence", json={
+                "resume_id": self.resume, "consent_to_external_ai": True,
+            })
+        self.assertEqual(limited.status_code, 429)
+        self.assertEqual(limited.headers.get("retry-after"), "3600")
         self.as_subject(self.other)
         self.assertEqual((await self.client.get(
             "/api/v2/candidates/me/resume-intelligence/" + body["run_id"])).status_code, 404)

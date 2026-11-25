@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
 from ..ai_provider import AIProviderDisabled, AIProviderError, OpenAIResponsesProvider
+from .. import config
 from ..auth import Identity, require_identity
 from ..resume_intelligence import (
     ATSReport, ClaimEvidence, ResumeIntelligenceOutput, analyze_resume_text,
@@ -49,6 +50,15 @@ class ResumeRecord(BaseModel):
 def get_ai_provider():
     """Dependency seam for deterministic fixture tests; never use fixtures in runtime."""
     return OpenAIResponsesProvider()
+
+
+def ai_quota_retry_after(exc) -> str | None:
+    orig = getattr(exc, "orig", exc)
+    sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    if sqlstate != "P0001" or "quota" not in str(orig).lower():
+        return None
+    detail = getattr(getattr(orig, "diag", None), "message_detail", None)
+    return {"hourly": "3600", "daily": "86400", "cost": "86400"}.get(detail, "3600")
 
 
 def _candidate(conn):
@@ -134,10 +144,20 @@ def analyze_my_resume(body: ResumeAnalysisRequest, identity: Identity = Depends(
     def start(conn):
         candidate_id = _candidate(conn)
         context = _resume_and_context(conn, candidate_id, body.resume_id, body.job_id)
-        conn.execute(text("""
-            insert into resume_ai_analysis_runs(id,candidate_id,resume_id,status,consented_at)
-            values (:id,:cid,:rid,'running',now())
-        """), {"id": run_id, "cid": candidate_id, "rid": body.resume_id})
+        try:
+            created = conn.execute(text("""
+                select hp_start_ai_analysis_run(:id,:resume,cast(:reserve as numeric))
+            """), {"id": run_id, "resume": body.resume_id,
+                   "reserve": config.AI_MAX_REQUEST_COST_USD}).scalar_one()
+        except Exception as exc:
+            retry_after = ai_quota_retry_after(exc)
+            if retry_after is None:
+                raise
+            raise HTTPException(status_code=429,
+                                detail="AI analysis request limit reached. Try again later.",
+                                headers={"Retry-After": retry_after}) from None
+        if created is None:
+            raise HTTPException(status_code=404, detail="Resume not found.")
         return candidate_id, context
     candidate_id, context = scoped_read(identity.subject, start)
     resume, projects, requirements, evidence, existing_skills, has_experience, has_education = context

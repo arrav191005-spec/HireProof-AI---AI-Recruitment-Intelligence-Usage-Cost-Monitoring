@@ -67,7 +67,7 @@ function friendlyError(error) {
   if (error.status === 403) return 'This account is not authorized for student verification.';
   if (error.status === 429) {
     const retry = error.retryAfter ? ` Try again in about ${Math.max(1, Math.ceil(Number(error.retryAfter) / 60))} minute(s).` : ' Try again later.';
-    return `A per-student verification limit was reached.${retry}`;
+    return `A per-student request limit was reached.${retry}`;
   }
   if (error.status === 404) return 'Project or verification not found.';
   if (error.status === 409) return 'A different verification is already active for this project. Wait for it to finish.';

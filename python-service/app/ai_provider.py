@@ -65,6 +65,8 @@ class OpenAIResponsesProvider:
     def __init__(self):
         if not config.ai_analysis_enabled():
             raise AIProviderDisabled("AI analysis is disabled or not configured.")
+        if not 0 < config.AI_MAX_REQUEST_COST_USD <= 5:
+            raise AIProviderDisabled("AI analysis request cost limit is not safely configured.")
         try:
             from openai import OpenAI
         except ImportError as exc:

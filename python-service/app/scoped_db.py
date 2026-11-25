@@ -1,11 +1,14 @@
 """RLS-scoped read sessions for private V2 endpoints."""
 import os
+import logging
 from functools import lru_cache
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
+
+logger = logging.getLogger("hireproof.scoped_db")
 
 
 @lru_cache(maxsize=1)
@@ -38,7 +41,7 @@ def scoped_read(subject, callback):
                         'project_verification_runs','project_verification_evidence',
                         'certificates','certificate_verification_runs',
                         'resume_ai_analysis_runs','resume_project_claims',
-                        'job_compatibility_runs','ai_request_usage')
+                        'job_compatibility_runs','ai_request_usage','ai_analysis_policy')
                       and pg_has_role(current_user, c.relowner, 'MEMBER')
                   )
                 from pg_roles r where r.rolname=current_user
@@ -49,5 +52,7 @@ def scoped_read(subject, callback):
             return callback(conn)
     except HTTPException:
         raise
-    except (SQLAlchemyError, ValueError):
+    except (SQLAlchemyError, ValueError) as exc:
+        # Never log SQL, parameters, resume content, or provider output.
+        logger.warning("scoped database transaction failed: %s", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Private database access is unavailable.") from None

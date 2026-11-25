@@ -19,9 +19,11 @@ development environment:
 ```dotenv
 AI_ANALYSIS_ENABLED=true
 OPENAI_API_KEY=<server-side key>
-OPENAI_RESUME_MODEL=<Responses API capable model>
+# OPENAI_MODEL is preferred; OPENAI_RESUME_MODEL remains supported.
+OPENAI_MODEL=<Responses API capable model>
 OPENAI_TIMEOUT_SECONDS=60
 OPENAI_MAX_RETRIES=2
+AI_MAX_REQUEST_COST_USD=0.05
 # Optional accounting inputs; set to the rate agreed for the selected model.
 OPENAI_INPUT_USD_PER_MILLION=0
 OPENAI_OUTPUT_USD_PER_MILLION=0
@@ -100,3 +102,10 @@ cd python-service
 LIVE_OPENAI_TEST=1 AI_ANALYSIS_ENABLED=true OPENAI_API_KEY=<server-side-key> \
 .venv/bin/python -m unittest tests/test_live_openai_optional.py -v
 ```
+
+Before this opt-in paid request, confirm the development project has billing
+or credits in the OpenAI dashboard. Keep the synthetic fixture below the
+configured `AI_MAX_REQUEST_COST_USD`, run only one test invocation, and check
+the resulting `ai_request_usage` row. The database also enforces defaults of
+three requests/hour, ten/day, and USD 0.50/day per student; only the migration
+administrator can change them.

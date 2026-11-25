@@ -27,9 +27,16 @@ OPENAI_MAX_RETRIES = int(os.environ.get("OPENAI_MAX_RETRIES", "2"))
 # AI analysis is intentionally fail-closed. A key alone does not enable
 # candidate data egress; an operator must opt in in an isolated environment.
 AI_ANALYSIS_ENABLED = os.environ.get("AI_ANALYSIS_ENABLED") == "true"
-OPENAI_RESUME_MODEL = os.environ.get("OPENAI_RESUME_MODEL", OPENAI_CHAT_MODEL)
+# OPENAI_MODEL is the Phase 13 operator-facing setting; retain the prior
+# OPENAI_RESUME_MODEL name for existing development environments.
+OPENAI_RESUME_MODEL = os.environ.get(
+    "OPENAI_MODEL", os.environ.get("OPENAI_RESUME_MODEL", OPENAI_CHAT_MODEL)
+)
 OPENAI_INPUT_USD_PER_MILLION = float(os.environ.get("OPENAI_INPUT_USD_PER_MILLION", "0"))
 OPENAI_OUTPUT_USD_PER_MILLION = float(os.environ.get("OPENAI_OUTPUT_USD_PER_MILLION", "0"))
+# A conservative reservation for each consented analysis. The database uses it
+# before sending a request so a burst cannot overrun the daily spend policy.
+AI_MAX_REQUEST_COST_USD = float(os.environ.get("AI_MAX_REQUEST_COST_USD", "0.05"))
 
 # Resume size limits.
 MAX_RESUME_SIZE_MB = float(os.environ.get("MAX_RESUME_SIZE_MB", "5"))
